@@ -1380,7 +1380,15 @@ profileSel.addEventListener('change', () => {
 // signed in with google, a person's profiles and schedules are kept in one firestore document
 // (users/<uid>), so the same schedule shows up on every device they sign in on.
 // without FIREBASE_CONFIG (or when opened from file://) the app stays local-only and the button is hidden.
-const FIREBASE_CONFIG = null;   // paste the web app config from the firebase console here
+// web app config from the firebase console (public identifiers, not secrets; access is limited by the firestore rules)
+const FIREBASE_CONFIG = {
+  apiKey: 'AIzaSyBWeN2S3PU5s6dvUXnZNo75V5MCSBfQsok',
+  authDomain: 'muscle-map-b6827.firebaseapp.com',
+  projectId: 'muscle-map-b6827',
+  storageBucket: 'muscle-map-b6827.firebasestorage.app',
+  messagingSenderId: '543826518667',
+  appId: '1:543826518667:web:a7469e265b03667375aa8e',
+};
 const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/10.12.2/';
 const syncBtn = document.getElementById('sync');
 let fb = null, syncUser = null, syncTimer = null, syncState = '', applyingRemote = false, justSignedIn = false;
