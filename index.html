@@ -1,0 +1,1608 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Muscle Map</title>
+<style>
+  :root {
+    --bg: #111316;
+    --panel: #181b1f;
+    --card: #20242a;
+    --ink: #ebe7e2;
+    --muted: #958e88;
+    --line: #2a2f35;
+    --accent: #e5483b;
+    --accent-soft: rgba(229, 72, 59, 0.14);
+    --secondary: #ef8f5f;
+    --chip: #252a30;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink); background: var(--bg); color-scheme: dark;
+    display: grid; grid-template-columns: 330px 1fr 380px; height: 100vh; overflow: hidden;
+  }
+  body.sched-closed { grid-template-columns: 1fr 380px; }
+  body.sched-closed #schedule { display: none; }
+  .btn {
+    border: 0; background: var(--chip); color: var(--ink); padding: 6px 11px; border-radius: 7px;
+    font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .btn:hover { background: #313740; }
+  .icon { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 4px; }
+  .icon:hover { color: var(--ink); background: var(--chip); }
+  input.num {
+    width: 42px; padding: 3px 4px; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--bg); color: var(--ink); font: inherit; font-size: 12px; text-align: center;
+  }
+  .unit { color: var(--muted); font-size: 11px; }
+
+  /* ---------- training schedule (left) ---------- */
+  #schedule {
+    background: var(--panel); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  #schedule header { padding: 16px 14px 8px; }
+  #schedule .top { display: flex; align-items: center; justify-content: space-between; }
+  #schedule h2 { margin: 0; font-size: 17px; }
+  #schedule header p { margin: 4px 0 10px; color: var(--muted); font-size: 12px; }
+  #workouts { overflow-y: auto; flex: 1 1 55%; min-height: 0; padding: 0 12px 6px; }
+  .wo {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 10px; margin-bottom: 10px; cursor: pointer;
+  }
+  .wo.target { border-color: var(--accent); }
+  .wo.off { opacity: 0.55; }
+  .wo.drag { border-style: dashed; border-color: var(--secondary); background: #2a2420; }
+  .wo-head { display: flex; gap: 6px; align-items: center; }
+  .wo-head .name {
+    flex: 1; min-width: 0; background: transparent; border: 0; color: var(--ink); font: inherit; font-weight: 650;
+    padding: 2px 4px; border-radius: 4px;
+  }
+  .wo-head .name:focus { outline: 1px solid var(--line); background: var(--bg); }
+  .wo-item { display: flex; align-items: center; gap: 6px; padding: 5px 0 5px 4px; font-size: 13px; border-top: 1px solid var(--line); }
+  .wo-item:first-of-type { margin-top: 6px; }
+  .wo-item .nm { flex: 1; min-width: 0; }
+  .wo-item .handle { cursor: grab; color: var(--muted); padding: 0 2px; user-select: none; font-size: 13px; }
+  .wo-item .handle:hover { color: var(--ink); }
+  .wo-item.dragging { opacity: 0.4; }
+  .wo-item.drop-before { box-shadow: inset 0 2px 0 var(--secondary); }
+  .wo-item .kind { font-size: 10px; color: #8fb8f0; margin-left: 4px; }
+  .wo-item .kind.mob { color: #5fd3c6; }
+  .warn { color: #ffb347; margin-left: 5px; cursor: help; font-size: 12px; }
+  .caution-note { margin-top: 8px; padding: 6px 8px; border-radius: 6px; background: rgba(255, 179, 71, 0.12); color: #ffd39a; font-size: 12px; }
+  /* exercises that train the hovered / selected muscle */
+  .hl-p { background: rgba(255, 59, 43, 0.16) !important; box-shadow: inset 3px 0 0 #ff3b2b; }
+  .hl-s { background: rgba(239, 143, 95, 0.10) !important; box-shadow: inset 3px 0 0 #ef8f5f; }
+  .profile-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  #profile { flex: 1; font-weight: 600; min-width: 0; }
+  #sync { white-space: nowrap; }
+  #routine, #profile {
+    background: var(--chip); color: var(--ink); border: 0; border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .mob-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
+  .mob-row:hover { background: var(--card); }
+  .mob-row .num { color: #5fd3c6; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .bar i.cardio {
+    background-image: repeating-linear-gradient(135deg, rgba(0,0,0,.45) 0 3px, transparent 3px 6px);
+  }
+  .wo-item.flash { animation: flash 1s; }
+  @keyframes flash { from { background: rgba(239, 143, 95, 0.35); } to { background: transparent; } }
+  .wo-empty {
+    color: var(--muted); font-size: 12px; padding: 10px 6px; text-align: center;
+    border: 1px dashed var(--line); border-radius: 6px; margin-top: 8px;
+  }
+  /* toggle switch */
+  .switch { position: relative; width: 30px; height: 17px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .switch span { position: absolute; inset: 0; background: #3a4048; border-radius: 9px; transition: background .15s; cursor: pointer; }
+  .switch span::after {
+    content: ""; position: absolute; left: 2px; top: 2px; width: 13px; height: 13px; border-radius: 50%;
+    background: #fff; transition: transform .15s;
+  }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(13px); }
+  #balance { border-top: 1px solid var(--line); padding: 10px 12px 12px; overflow-y: auto; flex: 1 1 45%; min-height: 0; }
+  #balance h3 { margin: 0 0 2px; font-size: 13px; }
+  #balance .sum { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+  .bal-row {
+    display: grid; grid-template-columns: 1fr 96px 30px; gap: 8px; align-items: center;
+    font-size: 12px; padding: 3px 4px; border-radius: 4px; cursor: pointer;
+  }
+  .bal-row:hover { background: var(--card); }
+  .bal-row .num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .bar { position: relative; height: 7px; background: var(--chip); border-radius: 4px; overflow: hidden; }
+  .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; }
+  .bar b { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,.25); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  #sched-open {
+    position: absolute; top: 14px; left: 14px; display: none; z-index: 4;
+    border: 1px solid var(--line); background: var(--panel);
+  }
+  body.sched-closed #sched-open { display: block; }
+  a { color: inherit; }
+  /* ---------- 3d viewer ---------- */
+  #viewer { position: relative; min-width: 0; min-height: 0; }
+  #viewer canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  #viewer canvas:active { cursor: grabbing; }
+  #loading {
+    position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); pointer-events: none;
+  }
+  #tooltip {
+    position: absolute; pointer-events: none; max-width: 280px; display: none;
+    background: rgba(10, 11, 13, 0.95); color: var(--ink); padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--line); box-shadow: 0 6px 24px rgba(0,0,0,.5); font-size: 13px; z-index: 5;
+  }
+  #tooltip .t-name { font-weight: 650; font-size: 15px; }
+  #tooltip .t-latin { color: var(--muted); font-style: italic; font-size: 12px; }
+  #tooltip .t-group { display: inline-block; margin: 6px 0 4px; padding: 1px 7px; border-radius: 10px; background: var(--accent); color: #fff; font-size: 11px; }
+  #tooltip .t-fn { margin: 2px 0 6px; }
+  #tooltip .t-ex { color: #d8d0ca; font-size: 12px; }
+  #tooltip .t-hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .toolbar {
+    position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: flex; gap: 6px; background: var(--panel); padding: 6px; border-radius: 10px;
+    border: 1px solid var(--line); flex-wrap: wrap; justify-content: center;
+  }
+  .toolbar button {
+    border: 0; background: var(--chip); color: var(--ink); padding: 7px 12px; border-radius: 7px;
+    font: inherit; cursor: pointer;
+  }
+  .toolbar button:hover { background: #313740; }
+  .toolbar button.on { background: var(--accent); color: #fff; }
+  .toolbar { flex-direction: column; align-items: center; }
+  .toolbar .row { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; align-items: center; }
+  .toolbar .lbl { color: var(--muted); font-size: 12px; margin: 0 2px 0 4px; }
+  .toolbar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+  .toolbar button[hidden] { display: none; }
+  .legend {
+    position: absolute; top: 14px; right: 14px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 12px; font-size: 12px; display: none;
+  }
+  .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+  /* ---------- side panel ---------- */
+  #panel {
+    background: var(--panel); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  #panel header { padding: 18px 18px 10px; }
+  #panel h1 { margin: 0 0 4px; font-size: 20px; }
+  #panel header p { margin: 0; color: var(--muted); font-size: 13px; }
+  #focus:empty { display: none; }
+  #focus {
+    margin: 4px 18px 10px; padding: 12px 14px; border-radius: 10px;
+    background: var(--accent-soft); border: 1px solid rgba(229, 72, 59, 0.35); position: relative;
+  }
+  #focus h2 { margin: 0 24px 2px 0; font-size: 16px; }
+  #focus .sub { color: var(--muted); font-size: 12px; font-style: italic; }
+  #focus p { margin: 6px 0; }
+  #focus .close {
+    position: absolute; top: 8px; right: 8px; border: 0; background: transparent; font-size: 18px;
+    cursor: pointer; color: var(--muted); line-height: 1;
+  }
+  #focus .row { margin-top: 6px; font-size: 12px; }
+  #focus .row b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .yt {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 6px 11px; border-radius: 7px;
+    background: #ff0033; color: #fff; text-decoration: none; font-size: 13px; font-weight: 600;
+  }
+  .yt:hover { background: #e0002d; }
+  .controls { padding: 0 18px 8px; }
+  #search {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; font: inherit;
+    background: var(--card); color: var(--ink);
+  }
+  #search::placeholder { color: var(--muted); }
+  #chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+  .chip {
+    border: 0; background: var(--chip); padding: 4px 10px; border-radius: 14px; font: inherit; font-size: 12px;
+    cursor: pointer; color: var(--ink);
+  }
+  .chip.on { background: var(--ink); color: var(--bg); }
+  #list { overflow-y: auto; padding: 0 10px 12px; flex: 1; min-height: 0; }
+  .grp { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 8px 4px; }
+  .ex {
+    padding: 9px 10px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; position: relative;
+    display: grid; grid-template-columns: 88px 1fr; column-gap: 10px; align-items: start;
+  }
+  .ex > .n, .ex > .e, .ex > .tags { grid-column: 2; }
+  /* position drawings are black-on-white line art: invert them to light lines on the dark card */
+  .ex .pose { position: relative; display: block; overflow: hidden; }
+  .ex .pose img, .pose-big img { filter: invert(0.9); }
+  .ex .pose img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); object-fit: contain; }
+  .ex .pose .end { opacity: 0; }
+  .ex:hover .pose .end { animation: pose-flip 1.4s infinite; }
+  .ex:hover .pose img:first-child { animation: pose-flip 1.4s infinite reverse; }
+  @keyframes pose-flip { 0%, 45% { opacity: 0; } 55%, 100% { opacity: 1; } }
+  .pose-big { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; }
+  /* light background turns dark through the invert filter, matching the card */
+  .pose-big img { width: 120px; height: 110px; object-fit: contain; border-radius: 6px; padding: 4px; background: #f1efec; }
+  .pose-big span { color: var(--muted); }
+  .ex .thumb {
+    grid-column: 1; grid-row: 1 / span 3; width: 88px; height: 84px; border-radius: 6px;
+    background: #15181c; object-fit: contain;
+  }  .ex:hover { background: var(--card); }
+  .ex.on { border-color: var(--accent); background: var(--accent-soft); }
+  .ex .n { font-weight: 600; padding-right: 56px; }
+  .ex .add {
+    position: absolute; top: 9px; right: 38px; width: 22px; height: 22px; border-radius: 50%; border: 0;
+    display: grid; place-items: center; background: var(--chip); color: var(--muted); font-size: 15px; cursor: pointer; padding: 0;
+  }
+  .ex .add:hover { background: var(--secondary); color: #1a1310; }
+  .ex .e { color: var(--muted); font-size: 12px; }
+  .ex .play {
+    position: absolute; top: 9px; right: 10px; width: 22px; height: 22px; border-radius: 50%;
+    display: grid; place-items: center; background: var(--chip); color: var(--muted); text-decoration: none; font-size: 10px;
+  }
+  .ex .play:hover { background: #ff0033; color: #fff; }
+  .tags { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--accent); color: #fff; cursor: pointer; }
+  .tag.s { background: var(--secondary); color: #1a1310; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; margin-left: 6px; vertical-align: 1px; background: var(--accent); color: #fff; }
+  .badge.s { background: var(--secondary); color: #1a1310; }
+  .empty { color: var(--muted); padding: 12px 8px; }
+  .credits { padding: 8px 18px 12px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); }
+  #list::-webkit-scrollbar { width: 8px; }
+  #list::-webkit-scrollbar-thumb { background: #2f353c; border-radius: 4px; }
+
+  /* ---------- phone layout: model on top, panel below ---------- */
+  @media (max-width: 820px) {
+    /* stacked page: model, then schedule, then exercises */
+    body, body.sched-closed { grid-template-columns: 1fr; grid-template-rows: 60vh auto auto; height: auto; overflow: auto; }
+    #viewer { grid-row: 1; }
+    #schedule { grid-row: 2; border-right: 0; border-top: 1px solid var(--line); }
+    #panel { grid-row: 3; height: 90vh; }
+    #workouts, #balance { flex: none; max-height: none; }
+    #panel { border-left: 0; border-top: 1px solid var(--line); }
+    #panel header { padding: 12px 16px 6px; }
+    #panel header p { display: none; }
+    .controls { padding: 0 16px 6px; }
+    #focus { margin: 4px 16px 8px; }
+    .toolbar { bottom: 8px; }
+  }
+</style>
+</head>
+<body>
+  <aside id="schedule">
+    <header>
+      <div class="top">
+        <h2>Training schedule</h2>
+        <button class="icon" id="sched-close" title="Hide schedule">◀</button>
+      </div>
+      <div class="profile-row">
+        <span class="unit">Profile</span>
+        <select id="profile" title="Switch between people (each has their own schedule)"></select>
+        <button class="btn" id="sync" hidden></button>
+      </div>
+      <p>Drag exercises or cardio here from the right (or press +). Drag ⠿ to reorder. Switch workouts on to see weekly sets per muscle on the body. Saved automatically in this browser; sign in to sync it across devices.</p>
+      <div class="actions">
+        <button class="btn" id="add-workout">+ New workout</button>
+        <select id="routine" title="Add a ready-made routine as a new workout"><option value="">+ Add routine…</option></select>
+        <button class="btn" id="export" title="Download your schedule as a backup file">Export</button>
+        <button class="btn" id="import" title="Load a schedule backup file">Import</button>
+        <input type="file" id="import-file" accept=".json,application/json" hidden>
+      </div>
+    </header>
+    <div id="workouts"></div>
+    <div id="balance"></div>
+  </aside>
+
+  <main id="viewer">
+    <div id="loading">Loading 3D model…</div>
+    <div id="tooltip"></div>
+    <button class="btn" id="sched-open">☰ Schedule</button>
+    <div class="legend" id="legend">
+      <div><span style="background:#ff3b2b"></span>Primary</div>
+      <div><span style="background:#ef8f5f"></span>Secondary</div>
+    </div>
+    <div class="legend" id="heat-legend"></div>
+    <div class="toolbar">
+      <div class="row">
+        <button data-view="front">Front</button>
+        <button data-view="back">Back</button>
+        <button data-view="left">Left</button>
+        <button data-view="right">Right</button>
+        <button id="spin">Auto-rotate</button>
+      </div>
+      <div class="row">
+        <span class="lbl">Layer</span>
+        <button data-layer="0" class="on" title="All muscles">Surface</button>
+        <button data-layer="1" title="Outer muscles see-through">Deep</button>
+        <button data-layer="2" title="Two outer layers see-through">Deeper</button>
+        <span class="sep"></span>
+        <button id="xray" class="on" title="When something is selected, uninvolved muscles become see-through">X-ray</button>
+        <button id="unhide" hidden>Show hidden</button>
+      </div>
+    </div>
+  </main>
+
+  <aside id="panel">
+    <header>
+      <h1>Muscle Map</h1>
+      <p>Drag to rotate, scroll to zoom. Hover a muscle for info, click it to see its exercises, right-click to hide it. Click an exercise to see what it trains. Use Layer to look under the outer muscles.</p>
+    </header>
+    <div id="focus"></div>
+    <div class="controls">
+      <input id="search" type="search" placeholder="Search exercises…">
+      <div id="chips"></div>
+    </div>
+    <div id="list"></div>
+    <div class="credits">
+      3D model: <a href="https://www.z-anatomy.com" target="_blank" rel="noopener">Z-Anatomy</a> (CC BY-SA 4.0),
+      based on BodyParts3D © DBCLS (CC BY 4.0). Simplified for web.
+      Exercise drawings: <a href="https://github.com/everkinetic/data" target="_blank" rel="noopener">everkinetic</a> (CC BY-SA 4.0).
+    </div>
+  </aside>
+
+<script src="data.js"></script>
+<script src="model.js"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const MUSCLES = window.MUSCLES, EXERCISES = window.EXERCISES, GROUPS = window.MUSCLE_GROUPS;
+
+// ======================= scene setup =======================
+const viewer = document.getElementById('viewer');
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+viewer.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#111316');
+// soft studio reflections so the muscles get a natural sheen
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 200);
+const TARGET = new THREE.Vector3(0, 9, 0);
+camera.position.set(0, 10, 36);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(TARGET);
+controls.enableDamping = true;
+controls.minDistance = 4;
+controls.maxDistance = 60;
+controls.autoRotateSpeed = 1.5;
+
+// key light + cool rim light from behind for a dark-studio look
+scene.add(new THREE.HemisphereLight(0xffffff, 0x302825, 0.6));
+const key = new THREE.DirectionalLight(0xfff4ea, 1.8); key.position.set(6, 14, 12); scene.add(key);
+const rim = new THREE.DirectionalLight(0xbcd4ff, 1.2); rim.position.set(-8, 10, -12); scene.add(rim);
+
+// floor disc for grounding
+const floor = new THREE.Mesh(new THREE.CircleGeometry(4, 64), new THREE.MeshBasicMaterial({ color: 0x1b1e22 }));
+floor.rotation.x = -Math.PI / 2; scene.add(floor);
+
+// ======================= materials =======================
+const COLORS = {
+  normal: new THREE.Color('#9a2a22'),   // gym muscle, nothing selected
+  other: new THREE.Color('#7a2620'),    // anatomical muscle not linked to exercises
+  dim: new THREE.Color('#4a3c39'),      // not involved in the current selection
+  primary: new THREE.Color('#ff3b2b'),
+  secondary: new THREE.Color('#ef8f5f'),
+};
+const boneMat = new THREE.MeshStandardMaterial({ color: '#d8cfc1', roughness: 0.7 });
+const tendonMat = new THREE.MeshStandardMaterial({ color: '#e8e0d2', roughness: 0.35, metalness: 0.05 });
+const headMat = new THREE.MeshStandardMaterial({ color: '#8f857b', roughness: 0.85 });
+function muscleMat() {
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: COLORS.normal.clone(), roughness: 0.5, clearcoat: 0.25, clearcoatRoughness: 0.5, envMapIntensity: 0.6,
+  });
+  // optional diagonal stripes (world space) that mark muscles stretched by mobility work;
+  // uStripe = 0/1 on/off, uStripeColor = how much the muscle is stretched
+  const stripe = { uStripe: { value: 0 }, uStripeColor: { value: new THREE.Color() } };
+  mat.userData.stripe = stripe;
+  mat.onBeforeCompile = shader => {
+    Object.assign(shader.uniforms, stripe);
+    shader.vertexShader = 'varying vec3 vStripePos;\n' + shader.vertexShader.replace('#include <project_vertex>',
+      '#include <project_vertex>\n  vStripePos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = 'uniform float uStripe;\nuniform vec3 uStripeColor;\nvarying vec3 vStripePos;\n' +
+      shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+  if (uStripe > 0.5) {
+    // anti-aliased bands: ~25% stripe, 75% muscle, about 5 bands per body unit
+    float d = dot(vStripePos, vec3(0.6, 0.8, 0.0)) * 5.0;
+    float fw = max(fwidth(d), 1e-4), f = fract(d);
+    float band = smoothstep(0.0, fw, f) - smoothstep(0.25, 0.25 + fw, f);
+    diffuseColor.rgb = mix(diffuseColor.rgb, uStripeColor, band * 0.9);
+  }`);
+  };
+  mat.customProgramCacheKey = () => 'muscle-stripes';
+  return mat;
+}
+
+// flat colour used to encode ids in offscreen passes (values are written to the target unchanged)
+const idColor = (r, g, b) => new THREE.MeshBasicMaterial({
+  color: new THREE.Color().setRGB(r / 255, g / 255, b / 255, THREE.LinearSRGBColorSpace),
+});
+
+// switch a material between solid and see-through ("ghost")
+function setGhost(mat, on, opacity) {
+  if (mat.transparent !== on) { mat.transparent = on; mat.depthWrite = !on; mat.needsUpdate = true; }
+  mat.opacity = on ? opacity : 1;
+}
+
+// ======================= load anatomy model =======================
+// gym muscle id for an anatomical name (null = not linked to any exercise)
+const matchers = Object.entries(MUSCLES).map(([id, m]) => [id, m.match.map(s => new RegExp(s, 'i'))]);
+const gymIdFor = name => (matchers.find(([, res]) => res.some(r => r.test(name))) || [null])[0];
+const cleanName = zname => (zname || '').replace(/\.(l|r|\d{3})$/i, '').trim();
+
+const muscles = [];    // muscle meshes, each with its own material
+const solids = [];     // bones + head: never see-through, block the view in layer detection
+const tendons = [];    // white tendons / aponeuroses
+const drawables = [];  // everything above, used by the offscreen passes
+const meshesById = {}; // gym id or "z:<name>" -> meshes
+const HIDDEN = /^platysma/i; // thin sheet over the neck/chest that hides the muscles below
+let loaded = false;
+
+function base64ToBuffer(b64) {
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+const draco = new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/gltf/');
+const loader = new GLTFLoader().setDRACOLoader(draco);
+loader.parse(base64ToBuffer(window.BODY_GLB), '', gltf => {
+  const model = gltf.scene;
+
+  // scale to 18 units tall, feet on the floor, centred
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
+  const s = 18 / size.y;
+  model.scale.setScalar(s);
+  model.position.set(-center.x * s, -box.min.y * s, -center.z * s);
+  scene.add(model);
+  model.updateMatrixWorld(true);
+
+  const all = [];
+  model.traverse(o => { if (o.isMesh) all.push(o); });
+
+  // everything above the bottom of the jaw is "head": face muscles and skull get replaced by a smooth head
+  const jaw = all.find(o => /^mandible/i.test(cleanName(o.userData.zname)));
+  const chinY = jaw ? new THREE.Box3().setFromObject(jaw).min.y : 16;
+  const headPts = [], v = new THREE.Vector3();
+
+  const gymCodes = Object.fromEntries(Object.keys(MUSCLES).map((id, i) => [id, i + 1]));
+  const anatCodes = new Map();
+  for (const o of all) {
+    const name = cleanName(o.userData.zname), kind = o.userData.kind;
+    o.geometry.computeBoundingSphere();
+    const cy = o.localToWorld(v.copy(o.geometry.boundingSphere.center)).y;
+    const gym = kind === 'muscle' ? gymIdFor(name) : null;
+
+    if ((cy > chinY && !gym) || HIDDEN.test(name)) {
+      // collect skull points for the smooth head, hide the original part
+      if (kind === 'bone') {
+        const pos = o.geometry.attributes.position;
+        for (let i = 0; i < pos.count; i += 3) headPts.push(o.localToWorld(new THREE.Vector3().fromBufferAttribute(pos, i)));
+      }
+      o.visible = false;
+      continue;
+    }
+    if (!anatCodes.has(name)) anatCodes.set(name, anatCodes.size + 1);
+    const anat = anatCodes.get(name);
+    if (kind === 'bone') {
+      o.material = boneMat; o.userData.idMat = idColor(250, 0, 0); solids.push(o);
+    } else if (kind === 'tendon') {
+      o.material = tendonMat; o.userData.idMat = idColor(251, anat & 255, anat >> 8); tendons.push(o);
+    } else {
+      const id = gym || 'z:' + name;
+      o.material = muscleMat();
+      o.userData.id = id;
+      o.userData.anat = name;
+      // border pass id: red = gym group (strong lines), green/blue = anatomical muscle (faint lines)
+      o.userData.idMat = idColor(gym ? gymCodes[gym] : 200, anat & 255, anat >> 8);
+      (meshesById[id] ||= []).push(o);
+      muscles.push(o);
+    }
+    drawables.push(o);
+  }
+
+  // smooth "mannequin" head: shrink-wrap a sphere onto the convex hull of the skull, then smooth it
+  if (headPts.length > 10) {
+    const hull = new THREE.Mesh(new ConvexGeometry(headPts), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+    const hc = new THREE.Box3().setFromObject(hull).getCenter(new THREE.Vector3());
+    let g = mergeVertices(new THREE.SphereGeometry(1, 64, 48).deleteAttribute('normal').deleteAttribute('uv'));
+    const pos = g.attributes.position, dir = new THREE.Vector3(), headRay = new THREE.Raycaster();
+    // radius of the hull in the direction of every sphere vertex
+    const radius = new Float32Array(pos.count);
+    for (let i = 0; i < pos.count; i++) {
+      dir.fromBufferAttribute(pos, i).normalize();
+      headRay.set(hc, dir);
+      const hit = headRay.intersectObject(hull)[0];
+      radius[i] = hit ? hit.distance : 0;
+    }
+    // laplacian smoothing of the radius field over the sphere's neighbouring vertices
+    const idx = g.index.array, nb = Array.from({ length: pos.count }, () => new Set());
+    for (let i = 0; i < idx.length; i += 3) for (let j = 0; j < 3; j++) {
+      nb[idx[i + j]].add(idx[i + (j + 1) % 3]); nb[idx[i + j]].add(idx[i + (j + 2) % 3]);
+    }
+    for (let it = 0; it < 6; it++) {
+      const next = radius.slice();
+      for (let i = 0; i < pos.count; i++) {
+        let sum = 0; for (const n of nb[i]) sum += radius[n];
+        next[i] = radius[i] * 0.4 + (sum / nb[i].size) * 0.6;
+      }
+      radius.set(next);
+    }
+    for (let i = 0; i < pos.count; i++) {
+      dir.fromBufferAttribute(pos, i).normalize().multiplyScalar(radius[i]).add(hc);
+      pos.setXYZ(i, dir.x, dir.y, dir.z);
+    }
+    g.computeVertexNormals();
+    const head = new THREE.Mesh(g, headMat);
+    head.userData.idMat = idColor(252, 0, 0);
+    scene.add(head);
+    solids.push(head); drawables.push(head);
+  }
+
+  // layer-detection id: each muscle gets a unique number, solids are marked with blue = 1
+  muscles.forEach((m, i) => { m.userData.layerMat = idColor((i + 1) & 255, (i + 1) >> 8, 0); });
+  const solidLayerMat = idColor(0, 0, 1);
+  solids.forEach(m => { m.userData.layerMat = solidLayerMat; });
+
+  // report gym muscles that found no mesh (helps when editing match patterns)
+  const missing = Object.keys(MUSCLES).filter(id => !meshesById[id]);
+  if (missing.length) console.warn('no mesh for:', missing.join(', '));
+
+  loaded = true;
+  document.getElementById('loading').remove();
+  refresh();
+  requestThumbs();
+}, err => {
+  document.getElementById('loading').textContent = 'Could not load the 3D model: ' + err.message;
+});
+
+// ======================= offscreen passes =======================
+// temporarily swap every drawable to another material (or hide it: null), draw, then restore
+function withPass(matFor, draw) {
+  const saved = drawables.map(m => [m.material, m.visible]);
+  for (const m of drawables) {
+    const mat = matFor(m);
+    if (mat) { m.material = mat; m.visible = true; } else m.visible = false;
+  }
+  const bg = scene.background, cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha();
+  scene.background = null; floor.visible = false;
+  renderer.setClearColor(0x000000, 0);
+  draw();
+  renderer.setClearColor(cc, ca); scene.background = bg; floor.visible = true;
+  drawables.forEach((m, i) => { m.material = saved[i][0]; m.visible = saved[i][1]; });
+  renderer.setRenderTarget(null);
+}
+
+// --- muscle borders: draw lines where neighbouring pixels belong to different muscles ---
+const idTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+const edgeMat = new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false,
+  uniforms: { tId: { value: idTarget.texture }, texel: { value: new THREE.Vector2() } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tId; uniform vec2 texel; varying vec2 vUv;
+    // the id buffer is rendered at 2x resolution; count id changes in a 4x4 block of its texels
+    // around this screen pixel, so lines get soft, anti-aliased edges instead of hard pixel steps
+    void main() {
+      float group = 0.0, part = 0.0;
+      for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+        vec2 uv = vUv + (vec2(float(i), float(j)) - 1.5) * texel;
+        vec4 c = texture2D(tId, uv);
+        vec4 r = texture2D(tId, uv + vec2(texel.x, 0.0));
+        vec4 u = texture2D(tId, uv + vec2(0.0, texel.y));
+        group += step(0.002, abs(r.r - c.r)) + step(0.002, abs(u.r - c.r));                 // gym group / background
+        part += step(0.002, length(r.gb - c.gb)) + step(0.002, length(u.gb - c.gb));        // anatomical muscle
+      }
+      float a = max(smoothstep(0.0, 4.0, group) * 0.75, smoothstep(0.0, 4.0, part) * 0.35);
+      if (a < 0.01) discard;
+      gl_FragColor = vec4(0.05, 0.02, 0.02, a);
+    }`,
+});
+const edgeScene = new THREE.Scene();
+edgeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), edgeMat));
+const edgeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+function renderBorders() {
+  withPass(m => (m.visible && !m.userData.ghost ? m.userData.idMat : null), () => {
+    renderer.setRenderTarget(idTarget);
+    renderer.clear();
+    renderer.render(scene, camera);
+  });
+  renderer.autoClear = false;
+  renderer.render(edgeScene, edgeCam);
+  renderer.autoClear = true;
+}
+
+// --- layers: find which muscles can be seen from outside by rendering the body from 24 directions ---
+const LAYER_RES = 320, VISIBLE_PX = 30;
+const layerTarget = new THREE.WebGLRenderTarget(LAYER_RES, LAYER_RES);
+const layerCam = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 100);
+const layerCache = [];  // layerCache[n] = set of muscles peeled away when showing layer n
+
+function visibleMuscles(excluded) {
+  const counts = new Uint32Array(muscles.length + 1), buf = new Uint8Array(LAYER_RES * LAYER_RES * 4);
+  withPass(m => (m.userData.layerMat && !excluded.has(m) ? m.userData.layerMat : null), () => {
+    renderer.setRenderTarget(layerTarget);
+    for (let az = 0; az < 8; az++) for (const el of [-0.5, 0, 0.5]) {
+      const a = az * Math.PI / 4;
+      layerCam.position.set(Math.sin(a) * Math.cos(el) * 40, 9 + Math.sin(el) * 40, Math.cos(a) * Math.cos(el) * 40);
+      layerCam.lookAt(0, 9, 0);
+      renderer.clear();
+      renderer.render(scene, layerCam);
+      renderer.readRenderTargetPixels(layerTarget, 0, 0, LAYER_RES, LAYER_RES, buf);
+      for (let i = 0; i < buf.length; i += 4) {
+        if (buf[i + 2] === 0) { const k = buf[i] | (buf[i + 1] << 8); if (k) counts[k]++; }
+      }
+    }
+  });
+  return new Set(muscles.filter((m, i) => !excluded.has(m) && counts[i + 1] >= VISIBLE_PX));
+}
+
+function peeledSet() {
+  if (!layerCache[0]) layerCache[0] = new Set();
+  for (let n = 1; n <= state.layer; n++) {
+    if (!layerCache[n]) layerCache[n] = new Set([...layerCache[n - 1], ...visibleMuscles(layerCache[n - 1])]);
+  }
+  return layerCache[state.layer];
+}
+
+// ======================= exercise thumbnails =======================
+// small front + back picture of the body per exercise (primary red, secondary orange; stretches in cyan).
+// rendered offscreen from the same model a few per frame, then cached as image urls.
+const THUMB_W = 88, THUMB_H = 84, THUMB_SCALE = 2;   // css size of the image, rendered at 2x for sharpness
+const thumbTarget = new THREE.WebGLRenderTarget(THUMB_W * THUMB_SCALE, THUMB_H * THUMB_SCALE, { samples: 4 });
+thumbTarget.texture.colorSpace = THREE.SRGBColorSpace;
+// each half of the image shows one view; frame the whole 18-unit body with a little margin
+const THUMB_VIEW_H = 19.5, THUMB_HALF_ASPECT = (THUMB_W / 2) / THUMB_H;
+const thumbCam = new THREE.OrthographicCamera(
+  -THUMB_VIEW_H * THUMB_HALF_ASPECT / 2, THUMB_VIEW_H * THUMB_HALF_ASPECT / 2, THUMB_VIEW_H / 2, -THUMB_VIEW_H / 2, 0.1, 100);
+// matte so highlights don't wash out the red at small size
+const thumbMat = c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.9, envMapIntensity: 0.35 });
+const THUMB_MATS = {
+  p: thumbMat('#ff3b2b'), s: thumbMat('#ef8f5f'),     // strength / cardio
+  mp: thumbMat('#4dd8e8'), ms: thumbMat('#a6eef5'),   // mobility (stretched muscles)
+  n: thumbMat('#5e4c48'), tendon: thumbMat('#e8e0d2'),
+};
+const thumbCache = new Map();   // exercise name -> image url
+const thumbQueue = [];          // exercise names waiting to be rendered
+const thumbCanvas = Object.assign(document.createElement('canvas'), { width: thumbTarget.width, height: thumbTarget.height });
+const thumbCtx = thumbCanvas.getContext('2d');
+const thumbPixels = new Uint8Array(thumbTarget.width * thumbTarget.height * 4);
+
+function renderThumb(ex) {
+  const mob = !!ex.mobility;
+  const matFor = m => {
+    const id = m.userData.id;
+    if (id) return ex.p.includes(id) ? THUMB_MATS[mob ? 'mp' : 'p'] : ex.s.includes(id) ? THUMB_MATS[mob ? 'ms' : 's'] : THUMB_MATS.n;
+    return tendons.includes(m) ? THUMB_MATS.tendon : m.material;   // bones / head keep their look
+  };
+  const w = thumbTarget.width, h = thumbTarget.height;
+  withPass(matFor, () => {
+    renderer.setRenderTarget(thumbTarget);
+    renderer.clear();
+    renderer.autoClear = false;
+    // left half: front view, right half: back view
+    [[0, 1], [1, -1]].forEach(([i, side]) => {
+      thumbCam.position.set(0, 9.3, 30 * side);
+      thumbCam.lookAt(0, 9.3, 0);
+      thumbTarget.viewport.set(i * w / 2, 0, w / 2, h);
+      renderer.setRenderTarget(thumbTarget);   // re-applies the target's viewport
+      renderer.render(scene, thumbCam);
+    });
+    renderer.autoClear = true;
+    thumbTarget.viewport.set(0, 0, w, h);
+    renderer.readRenderTargetPixels(thumbTarget, 0, 0, w, h, thumbPixels);
+  });
+  // webgl rows start at the bottom: flip them into the 2d canvas
+  const img = thumbCtx.createImageData(w, h);
+  for (let y = 0; y < h; y++) img.data.set(thumbPixels.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
+  thumbCtx.putImageData(img, 0, 0);
+  return thumbCanvas.toDataURL('image/png');
+}
+
+// queue every visible thumbnail that has no image yet
+function requestThumbs() {
+  document.querySelectorAll('img.thumb[data-thumb]').forEach(img => {
+    const name = img.dataset.thumb;
+    if (thumbCache.has(name)) img.src = thumbCache.get(name);
+    else if (!thumbQueue.includes(name)) thumbQueue.push(name);
+  });
+}
+// render a couple of queued thumbnails per frame so the page stays responsive
+function processThumbs() {
+  for (let n = 0; n < 2 && thumbQueue.length; n++) {
+    const name = thumbQueue.shift(), ex = exByName[name];
+    if (!ex || thumbCache.has(name)) continue;
+    thumbCache.set(name, renderThumb(ex));
+    document.querySelectorAll(`img.thumb[data-thumb="${CSS.escape(name)}"]`).forEach(img => { img.src = thumbCache.get(name); });
+  }
+}
+
+// ======================= state + colouring =======================
+const state = { hover: null, muscle: null, exercise: null, previewEx: null, group: 'All', query: '', layer: 0, xray: true, hidden: new Set() };
+
+// apply the current state to every muscle: colour, glow, see-through, hidden
+function refresh() {
+  if (!loaded) return;
+  // an exercise hovered in a list previews its muscles, otherwise use the clicked exercise / muscle
+  const ex = state.previewEx || state.exercise, sel = !!(ex || state.muscle);
+  const roleOf = id => ex ? (ex.p.includes(id) ? 'p' : ex.s.includes(id) ? 's' : null) : (id === state.muscle ? 'p' : null);
+  const peeled = peeledSet();
+  // schedule view: colour every gym muscle by its weekly training volume (when nothing is selected)
+  const heat = !sel && heatActive() ? weeklySets() : null;
+  const mob = heat ? weeklyMobility() : null;
+  for (const m of muscles) {
+    const id = m.userData.id;
+    const role = sel ? roleOf(id) : null;
+    // x-ray: only primary muscles stay solid, so deep primaries show through secondary ones
+    const ghost = peeled.has(m) || (sel && state.xray && role !== 'p');
+    let col = id.startsWith('z:') ? COLORS.other : COLORS.normal;
+    if (sel) col = role === 'p' ? COLORS.primary : role === 's' ? COLORS.secondary : COLORS.dim;
+    else if (heat) col = id.startsWith('z:') ? COLORS.dim : STATUS[statusOf(heat[id])].color3;
+    // stretch stripes in the schedule view
+    const lvl = mob && !id.startsWith('z:') ? stretchOf(mob[id]) : null;
+    m.material.userData.stripe.uStripe.value = lvl ? 1 : 0;
+    if (lvl) m.material.userData.stripe.uStripeColor.value.copy(STRETCH[lvl].color3);
+    m.material.color.copy(col);
+    const hov = id === state.hover && !ghost;
+    m.material.emissive.set(hov ? '#ffb347' : '#ff2000');
+    m.material.emissiveIntensity = hov ? 0.35 : role === 'p' ? 0.25 : 0;
+    // involved muscles stay clearly visible even when see-through; others become faint
+    setGhost(m.material, ghost, role === 'p' ? 0.5 : role === 's' ? 0.4 : 0.08);
+    m.userData.ghost = ghost;
+    m.visible = !state.hidden.has(m);
+  }
+  const tendonGhost = (sel && state.xray) || state.layer > 0;
+  setGhost(tendonMat, tendonGhost, 0.07);
+  tendons.forEach(t => { t.userData.ghost = tendonGhost; });
+
+  document.getElementById('legend').style.display = ex ? 'block' : 'none';
+  const heatLegend = document.getElementById('heat-legend');
+  heatLegend.style.display = heat ? 'block' : 'none';
+  heatLegend.innerHTML = '<div style="margin-bottom:4px;color:var(--muted)">Weekly sets</div>' +
+    ['high', 'good', 'low', 'none'].map(k => `<div><span style="background:${STATUS[k].color}"></span>${STATUS[k].label} (${STATUS[k].range})</div>`).join('') +
+    (mob && Object.values(mob).some(v => v > 0)
+      ? '<div style="margin:6px 0 4px;color:var(--muted)">Stretch stripes (min / week)</div>' +
+        Object.values(STRETCH).map(s => `<div><span style="background:repeating-linear-gradient(135deg, ${s.color} 0 3px, transparent 3px 5px)"></span>${s.label} (${s.range})</div>`).join('')
+      : '');
+  document.querySelectorAll('[data-layer]').forEach(b => b.classList.toggle('on', +b.dataset.layer === state.layer));
+  document.getElementById('xray').classList.toggle('on', state.xray);
+  markExercises();
+  const unhide = document.getElementById('unhide');
+  unhide.hidden = !state.hidden.size;
+  unhide.textContent = `Show hidden (${state.hidden.size})`;
+}
+
+// ======================= tooltip + picking =======================
+const tooltip = document.getElementById('tooltip');
+const ray = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+// nearest solid, visible muscle under the pointer (see-through muscles are skipped)
+function pick(ev) {
+  const r = renderer.domElement.getBoundingClientRect();
+  mouse.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObjects(muscles, false).find(h => h.object.visible && !h.object.userData.ghost);
+  return hit ? hit.object : null;
+}
+
+// exercises that train a muscle, primary ones first
+function exercisesFor(id) {
+  const prim = EXERCISES.filter(e => e.p.includes(id));
+  const sec = EXERCISES.filter(e => !e.p.includes(id) && e.s.includes(id));
+  return { prim, sec };
+}
+
+function showTooltip(mesh, ev) {
+  const id = mesh.userData.id;
+  if (id.startsWith('z:')) {
+    // anatomical muscle without gym info: show its name only
+    tooltip.innerHTML = `<div class="t-name">${mesh.userData.anat}</div>
+      <div class="t-hint">Smaller / deep muscle, not a main training target here</div>`;
+  } else {
+    const m = MUSCLES[id];
+    const exList = exercisesFor(id).prim.slice(0, 4).map(e => e.name).join(', ') || '—';
+    tooltip.innerHTML = `
+      <div class="t-name">${m.name}</div>
+      <div class="t-latin">${m.latin}</div>
+      <div class="t-group">${m.group}</div>
+      <div class="t-fn">${m.fn}</div>
+      <div class="t-ex"><b>Best exercises:</b> ${exList}</div>
+      ${heatActive() ? (() => { const n = weeklySets()[id], st = STATUS[statusOf(n)];
+        const c = weeklyVolume().cardio[id], mob = weeklyMobility()[id];
+        return `<div class="t-ex" style="margin-top:4px"><span class="dot" style="background:${st.color}"></span><b>Your week:</b> ${fmtSets(n)} sets${c ? ` (${fmtSets(c)} from cardio)` : ''} · ${st.label}${mob ? ` · ${fmtSets(mob)} min stretching` : ''}</div>`; })() : ''}
+      <div class="t-hint">Part: ${mesh.userData.anat} · click for exercises, right-click to hide</div>`;
+  }
+  tooltip.style.display = 'block';
+  // keep the tooltip inside the viewer
+  const vr = viewer.getBoundingClientRect();
+  let x = ev.clientX - vr.left + 16, y = ev.clientY - vr.top + 16;
+  const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  if (x + tw > vr.width - 8) x = ev.clientX - vr.left - tw - 16;
+  if (y + th > vr.height - 8) y = vr.height - th - 8;
+  tooltip.style.left = x + 'px'; tooltip.style.top = y + 'px';
+}
+
+const canvas = renderer.domElement;
+let downAt = null;
+canvas.addEventListener('pointermove', ev => {
+  if (ev.pointerType === 'touch') return;      // touch devices use tap instead of hover
+  const mesh = downAt ? null : pick(ev);       // no hover effects while dragging
+  const id = mesh ? mesh.userData.id : null;
+  if (id !== state.hover) { state.hover = id; refresh(); }
+  if (mesh) showTooltip(mesh, ev); else tooltip.style.display = 'none';
+});
+canvas.addEventListener('pointerleave', () => { state.hover = null; tooltip.style.display = 'none'; refresh(); });
+canvas.addEventListener('pointerdown', ev => { downAt = [ev.clientX, ev.clientY]; });
+canvas.addEventListener('contextmenu', ev => ev.preventDefault());
+canvas.addEventListener('pointerup', ev => {
+  // treat as a click only if the pointer barely moved (otherwise it was a rotate/pan drag)
+  const moved = downAt && Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]) > 5;
+  downAt = null;
+  if (moved) return;
+  const mesh = pick(ev);
+  if (ev.button === 2) {
+    // right-click: hide this muscle to see what is under it
+    if (mesh) { state.hidden.add(mesh); state.hover = null; tooltip.style.display = 'none'; refresh(); }
+    return;
+  }
+  const id = mesh ? mesh.userData.id : null;
+  if (ev.pointerType === 'touch' && mesh) showTooltip(mesh, ev);
+  // only gym muscles can be selected; clicking anything else clears the selection
+  selectMuscle(id && !id.startsWith('z:') && id !== state.muscle ? id : null);
+});
+
+// ======================= side panel =======================
+const listEl = document.getElementById('list');
+const focusEl = document.getElementById('focus');
+const chipsEl = document.getElementById('chips');
+
+// youtube search for short (< 4 min) form videos of an exercise
+const videoUrl = ex => 'https://www.youtube.com/results?search_query=' +
+  encodeURIComponent(ex.name + ' proper form') + '&sp=EgIYAQ%253D%253D';
+
+function selectMuscle(id) {
+  state.muscle = id; state.exercise = null;
+  renderPanel(); refresh();
+}
+function selectExercise(ex) {
+  state.exercise = state.exercise === ex ? null : ex;
+  state.muscle = null;
+  // turn the model to the side where the primary muscles mostly are (front z > 0, back z < 0)
+  if (state.exercise) {
+    const c = new THREE.Vector3();
+    const zs = ex.p.flatMap(id => (meshesById[id] || []).map(m => m.localToWorld(c.copy(m.geometry.boundingSphere.center)).z));
+    if (zs.length) setView(zs.reduce((a, b) => a + b, 0) >= 0 ? 'front' : 'back');
+  }
+  renderPanel(); refresh();
+}
+
+const tagHtml = (ids, cls = '') => ids.map(id => `<span class="tag ${cls}" data-muscle="${id}">${MUSCLES[id].name}</span>`).join('');
+
+function exItem(ex, badge) {
+  const b = badge ? `<span class="badge ${badge === 'secondary' ? 's' : ''}">${badge}</span>` : '';
+  return `<div class="ex ${state.exercise === ex ? 'on' : ''}" data-ex="${EXERCISES.indexOf(ex)}" draggable="true">
+    <button class="add" data-add="${EXERCISES.indexOf(ex)}" title="Add to selected workout">+</button>
+    <a class="play" href="${videoUrl(ex)}" target="_blank" rel="noopener" title="Watch form video">▶</a>
+    ${ex.pose
+      // position drawing (start frame; the end frame fades in on hover so it looks animated)
+      ? `<span class="thumb pose"><img src="img/poses/${ex.pose}-relaxation.svg" alt="" loading="lazy"><img class="end" src="img/poses/${ex.pose}-tension.svg" alt="" loading="lazy"></span>`
+      // no drawing available: small body with the trained muscles highlighted
+      : `<img class="thumb" data-thumb="${esc(ex.name)}" alt="" ${thumbCache.has(ex.name) ? `src="${thumbCache.get(ex.name)}"` : ''}>`}
+    <div class="n">${ex.name}${ex.caution ? `<span class="warn" title="Back caution: ${esc(ex.caution)}">⚠</span>` : ''}${b}</div>
+    <div class="e">${ex.eq}</div>
+    <div class="tags">${tagHtml(ex.p)}${tagHtml(ex.s, 's')}</div>
+  </div>`;
+}
+
+function renderPanel() {
+  // focus card: selected exercise or selected muscle
+  if (state.exercise) {
+    const ex = state.exercise;
+    focusEl.innerHTML = `<button class="close" title="Clear">×</button>
+      <h2>${ex.name}</h2><div class="sub">${ex.eq}</div>
+      ${ex.pose ? `<div class="pose-big"><img src="img/poses/${ex.pose}-relaxation.svg" alt="start position"><span>→</span><img src="img/poses/${ex.pose}-tension.svg" alt="end position"></div>` : ''}
+      <p>${ex.tip}</p>
+      ${ex.caution ? `<div class="caution-note">⚠ Back caution: ${esc(ex.caution)}</div>` : ''}
+      <div class="row"><b>${ex.mobility ? 'Stretches' : 'Primary'}</b><div class="tags">${tagHtml(ex.p)}</div></div>
+      ${ex.s.length ? `<div class="row"><b>${ex.mobility ? 'Also' : 'Secondary'}</b><div class="tags">${tagHtml(ex.s, 's')}</div></div>` : ''}
+      <a class="yt" href="${videoUrl(ex)}" target="_blank" rel="noopener">▶ Watch form video</a>`;
+  } else if (state.muscle) {
+    const m = MUSCLES[state.muscle];
+    focusEl.innerHTML = `<button class="close" title="Clear">×</button>
+      <h2>${m.name}</h2><div class="sub">${m.latin} · ${m.group}</div><p>${m.fn}</p>`;
+  } else focusEl.innerHTML = '';
+
+  // exercise list, filtered by selected muscle / group chip / search text
+  const q = state.query.trim().toLowerCase();
+  const match = ex => !q || ex.name.toLowerCase().includes(q) || ex.eq.toLowerCase().includes(q) ||
+    [...ex.p, ...ex.s].some(id => MUSCLES[id].name.toLowerCase().includes(q));
+
+  let html = '';
+  if (state.muscle) {
+    const { prim, sec } = exercisesFor(state.muscle);
+    const p = prim.filter(match), s = sec.filter(match);
+    html += `<div class="grp">Trains ${MUSCLES[state.muscle].name.toLowerCase()} (${p.length + s.length})</div>`;
+    html += p.map(e => exItem(e, 'primary')).join('') + s.map(e => exItem(e, 'secondary')).join('');
+    if (!p.length && !s.length) html += `<div class="empty">No exercises match.</div>`;
+  } else {
+    for (const g of GROUPS) {
+      if (state.group !== 'All' && state.group !== g) continue;
+      const items = EXERCISES.filter(e => e.group === g && match(e));
+      if (items.length) html += `<div class="grp">${g}</div>` + items.map(e => exItem(e)).join('');
+    }
+    if (!html) html = `<div class="empty">No exercises match.</div>`;
+  }
+  listEl.innerHTML = html;
+
+  chipsEl.innerHTML = ['All', ...GROUPS].map(g =>
+    `<button class="chip ${state.group === g && !state.muscle ? 'on' : ''}" data-group="${g}">${g}</button>`).join('');
+  markExercises();
+  requestThumbs();
+}
+
+// one delegated click handler for the whole panel
+document.getElementById('panel').addEventListener('click', ev => {
+  if (ev.target.closest('a')) return;          // video / credit links just open
+  const add = ev.target.closest('[data-add]');
+  if (add) { addToWorkout(EXERCISES[+add.dataset.add]); return; }
+  const tag = ev.target.closest('[data-muscle]');
+  if (tag) { ev.stopPropagation(); selectMuscle(tag.dataset.muscle); return; }
+  const exEl = ev.target.closest('[data-ex]');
+  if (exEl) { selectExercise(EXERCISES[+exEl.dataset.ex]); return; }
+  const chip = ev.target.closest('[data-group]');
+  if (chip) { state.group = chip.dataset.group; state.muscle = null; state.exercise = null; renderPanel(); refresh(); return; }
+  if (ev.target.closest('.close')) { state.muscle = null; state.exercise = null; renderPanel(); refresh(); }
+});
+document.getElementById('search').addEventListener('input', ev => { state.query = ev.target.value; renderPanel(); });
+// drag an exercise from the list into a workout on the left
+listEl.addEventListener('dragstart', ev => {
+  const exEl = ev.target.closest('[data-ex]');
+  if (exEl) { ev.dataTransfer.setData('text/plain', exEl.dataset.ex); ev.dataTransfer.effectAllowed = 'copy'; }
+});
+
+// ======================= toolbar =======================
+const VIEWS = { front: [0, 10, 36], back: [0, 10, -36], left: [36, 10, 0], right: [-36, 10, 0] };
+const VIEW_ANGLE = { front: 0, back: Math.PI, left: Math.PI / 2, right: -Math.PI / 2 };
+let camGoal = null;   // target azimuth; camera orbits around the body instead of flying through it
+function setView(name) {
+  if (name in VIEW_ANGLE) camGoal = VIEW_ANGLE[name];
+}
+document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+const spinBtn = document.getElementById('spin');
+spinBtn.addEventListener('click', () => {
+  controls.autoRotate = !controls.autoRotate;
+  spinBtn.classList.toggle('on', controls.autoRotate);
+});
+document.querySelectorAll('[data-layer]').forEach(b => b.addEventListener('click', () => { state.layer = +b.dataset.layer; refresh(); }));
+document.getElementById('xray').addEventListener('click', () => { state.xray = !state.xray; refresh(); });
+document.getElementById('unhide').addEventListener('click', () => { state.hidden.clear(); refresh(); });
+controls.addEventListener('start', () => { camGoal = null; });
+
+// optional url hash: index.html#back (start view) or index.html#ex=Deadlift (preselect an exercise)
+const hash = decodeURIComponent(location.hash.slice(1));
+if (VIEWS[hash]) camera.position.set(...VIEWS[hash]);
+if (hash.startsWith('ex=')) state.exercise = EXERCISES.find(e => e.name.toLowerCase() === hash.slice(3).toLowerCase()) || null;
+
+// ======================= training schedule =======================
+// weekly volume per muscle = sets x times per week; primary muscles count fully, secondary muscles half.
+// thresholds follow common hypertrophy guidance (~10-20 hard sets per muscle per week).
+const VOLUME = { low: 8, high: 20 };
+const STATUS = {
+  none: { label: 'Not trained', range: '0', color: '#4a3c39' },
+  low: { label: 'Under-trained', range: `< ${VOLUME.low}`, color: '#4a8fe0' },
+  good: { label: 'Good', range: `${VOLUME.low}–${VOLUME.high}`, color: '#38c172' },
+  high: { label: 'Overtraining risk', range: `> ${VOLUME.high}`, color: '#ff3b2b' },
+};
+// stretch levels (weekly mobility minutes per muscle), shown as stripes on the body.
+// ~5+ min per muscle per week is a common target for improving flexibility.
+const STRETCH = {
+  light: { label: 'Light', range: '< 5', color: '#ffd166' },
+  good: { label: 'Good', range: '5–15', color: '#4dd8e8' },
+  lots: { label: 'A lot', range: '> 15', color: '#c77dff' },
+};
+const stretchOf = min => min <= 0 ? null : min < 5 ? 'light' : min <= 15 ? 'good' : 'lots';
+for (const s of [...Object.values(STATUS), ...Object.values(STRETCH)]) s.color3 = new THREE.Color(s.color);
+const statusOf = n => n <= 0 ? 'none' : n < VOLUME.low ? 'low' : n <= VOLUME.high ? 'good' : 'high';
+const fmtSets = n => (Math.round(n * 10) / 10).toString();
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const uid = () => Math.random().toString(36).slice(2, 9);
+const exByName = Object.fromEntries(EXERCISES.map(e => [e.name, e]));
+
+// profiles: each person has their own schedule, all stored in this browser only (localStorage).
+// the first profile ("me") keeps the original storage key, so schedules saved before profiles existed still load.
+const PROFILES_KEY = 'muscle-map-profiles-v1';
+function loadProfiles() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PROFILES_KEY));
+    if (p && Array.isArray(p.list) && p.list.length) return p;
+  } catch { /* storage blocked or corrupt: default profile */ }
+  return { active: 'me', list: [{ id: 'me', name: 'Me' }] };
+}
+const profiles = loadProfiles();
+const saveProfiles = () => {
+  try { localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles)); } catch { /* not persisted */ }
+  queueSync();
+};
+const scheduleKey = id => (id === 'me' ? 'muscle-map-schedule-v1' : 'muscle-map-schedule-v1:' + id);
+const activeProfile = () => profiles.list.find(p => p.id === profiles.active) || profiles.list[0];
+
+function loadSchedule() {
+  try {
+    const s = JSON.parse(localStorage.getItem(scheduleKey(profiles.active)));
+    if (s && Array.isArray(s.workouts)) return s;
+  } catch { /* storage blocked or corrupt: start fresh */ }
+  const first = { id: uid(), name: 'Workout A', freq: 1, on: true, items: [] };
+  return { workouts: [first], target: first.id };
+}
+function saveSchedule() {
+  try { localStorage.setItem(scheduleKey(profiles.active), JSON.stringify(schedule)); } catch { /* not persisted */ }
+  queueSync();
+}
+const schedule = loadSchedule();
+
+const heatActive = () => schedule.workouts.some(w => w.on && w.items.length);
+// cardio and mobility are logged in minutes, strength exercises in sets
+const isTimed = ex => !!(ex && (ex.cardio || ex.mobility));
+// default amount when an exercise is added: 3 sets, 30 min cardio, 5 min mobility
+const newItem = ex => ex.cardio ? { ex: ex.name, min: 30 } : ex.mobility ? { ex: ex.name, min: 5 } : { ex: ex.name, sets: 3 };
+
+// weekly stretching minutes per muscle (mobility does not count as training volume)
+function weeklyMobility() {
+  const min = Object.fromEntries(Object.keys(MUSCLES).map(id => [id, 0]));
+  for (const w of schedule.workouts) {
+    if (!w.on) continue;
+    for (const it of w.items) {
+      const ex = exByName[it.ex];
+      if (!ex || !ex.mobility) continue;
+      ex.p.forEach(id => { min[id] += it.min * w.freq; });
+      ex.s.forEach(id => { min[id] += (it.min * w.freq) / 2; });
+    }
+  }
+  return min;
+}
+
+// weekly volume per muscle: total set-equivalents, and the part of it that comes from cardio
+function weeklyVolume() {
+  const zero = () => Object.fromEntries(Object.keys(MUSCLES).map(id => [id, 0]));
+  const total = zero(), cardio = zero();
+  for (const w of schedule.workouts) {
+    if (!w.on) continue;
+    for (const it of w.items) {
+      const ex = exByName[it.ex];
+      if (!ex || ex.mobility) continue;
+      // cardio: minutes -> set-equivalents using the activity's rate per 10 minutes
+      const n = (ex.cardio ? (it.min / 10) * ex.rate : it.sets) * w.freq;
+      const add = (id, v) => { total[id] += v; if (ex.cardio) cardio[id] += v; };
+      ex.p.forEach(id => add(id, n));
+      ex.s.forEach(id => add(id, n / 2));
+    }
+  }
+  return { total, cardio };
+}
+const weeklySets = () => weeklyVolume().total;
+
+const workoutsEl = document.getElementById('workouts');
+const balanceEl = document.getElementById('balance');
+const findWorkout = id => schedule.workouts.find(w => w.id === id);
+
+function addToWorkout(ex, woId = schedule.target) {
+  let w = findWorkout(woId) || schedule.workouts[0];
+  if (!w) { w = { id: uid(), name: 'Workout A', freq: 1, on: true, items: [] }; schedule.workouts.push(w); }
+  schedule.target = w.id;
+  if (!w.items.some(it => it.ex === ex.name)) w.items.push(newItem(ex));
+  saveSchedule();
+  scheduleChanged(w.id, ex.name);
+}
+
+// re-render the schedule + balance and recolour the body
+function scheduleChanged(flashWo, flashEx) {
+  renderSchedule(flashWo, flashEx);
+  refresh();
+}
+
+function renderSchedule(flashWo, flashEx) {
+  workoutsEl.innerHTML = schedule.workouts.map(w => `
+    <div class="wo ${w.id === schedule.target ? 'target' : ''} ${w.on ? '' : 'off'}" data-wo="${w.id}">
+      <div class="wo-head">
+        <label class="switch" title="Show on body"><input type="checkbox" data-act="toggle" ${w.on ? 'checked' : ''}><span></span></label>
+        <input class="name" data-act="name" value="${esc(w.name)}" title="Rename">
+        <input class="num" type="number" min="1" max="7" data-act="freq" value="${w.freq}" title="Times per week"><span class="unit">×/wk</span>
+        <button class="icon" data-act="del" title="Delete workout">🗑</button>
+      </div>
+      ${w.items.map((it, i) => {
+        const ex = exByName[it.ex];
+        const kind = ex?.cardio ? '<span class="kind">cardio</span>' : ex?.mobility ? '<span class="kind mob">mobility</span>' : '';
+        return `
+        <div class="wo-item ${w.id === flashWo && it.ex === flashEx ? 'flash' : ''}" data-i="${i}" data-name="${esc(it.ex)}">
+          <span class="handle" draggable="true" title="Drag to reorder">⠿</span>
+          <span class="nm">${esc(it.ex)}${kind}${ex?.caution ? `<span class="warn" title="Back caution: ${esc(ex.caution)}">⚠</span>` : ''}</span>
+          ${isTimed(ex)
+            ? `<input class="num" type="number" min="1" max="600" data-act="amount" value="${it.min}" title="Minutes per session"><span class="unit">min</span>`
+            : `<input class="num" type="number" min="1" max="20" data-act="amount" value="${it.sets}" title="Sets per session"><span class="unit">sets</span>`}
+          <button class="icon" data-act="rm" title="Remove">×</button>
+        </div>`;
+      }).join('')}
+      ${w.items.length ? '' : '<div class="wo-empty">Drop exercises here</div>'}
+    </div>`).join('') || '<div class="wo-empty">No workouts yet</div>';
+  renderBalance();
+  markExercises();
+}
+
+function renderBalance() {
+  if (!heatActive()) {
+    balanceEl.innerHTML = '<h3>Muscle balance</h3><div class="sum">Switch on a workout with exercises to see weekly sets per muscle.</div>';
+    return;
+  }
+  renderBalanceRows();
+  // stretching minutes per muscle, listed below the training volume
+  const mob = weeklyMobility();
+  const mobRows = Object.keys(MUSCLES).filter(id => mob[id] > 0).sort((a, b) => mob[b] - mob[a]);
+  if (mobRows.length) {
+    // same bar layout as the weekly-sets list; marks at the 5 and 15 minute thresholds
+    const max = Math.max(15 * 1.4, ...mobRows.map(id => mob[id]));
+    const marks = [5, 15].map(v => `<b style="left:${(v / max) * 100}%"></b>`).join('');
+    const count = k => mobRows.filter(id => stretchOf(mob[id]) === k).length;
+    balanceEl.insertAdjacentHTML('beforeend', `<h3 style="margin-top:16px">Mobility (stretch minutes / week)</h3>
+      <div class="sum">${Object.entries(STRETCH).map(([k, s]) =>
+        `<span class="dot" style="background:${s.color}"></span>${count(k)} ${s.label.toLowerCase()} (${s.range})`).join(' &nbsp;')}
+        <br>Not counted as training sets.</div>
+      ${mobRows.map(id => {
+        const s = STRETCH[stretchOf(mob[id])];
+        return `<div class="bal-row" data-muscle="${id}" title="${s.label} stretch">
+          <span>${MUSCLES[id].name}</span>
+          <span class="bar"><i class="cardio" style="width:${(mob[id] / max) * 100}%;background-color:${s.color}"></i>${marks}</span>
+          <span class="num">${fmtSets(mob[id])}</span>
+        </div>`;
+      }).join('')}`);
+  }
+}
+
+function renderBalanceRows() {
+  const { total: sets, cardio } = weeklyVolume();
+  const rows = Object.keys(MUSCLES).map(id => ({ id, n: sets[id], c: cardio[id], st: statusOf(sets[id]) })).sort((a, b) => b.n - a.n);
+  const anyCardio = rows.some(r => r.c > 0);
+  const max = Math.max(VOLUME.high * 1.4, ...rows.map(r => r.n));
+  const count = k => rows.filter(r => r.st === k).length;
+  const marks = [VOLUME.low, VOLUME.high].map(v => `<b style="left:${(v / max) * 100}%"></b>`).join('');
+  balanceEl.innerHTML = `<h3>Muscle balance (weekly sets)</h3>
+    <div class="sum">${['high', 'good', 'low', 'none'].map(k =>
+      `<span class="dot" style="background:${STATUS[k].color}"></span>${count(k)} ${STATUS[k].label.toLowerCase()}`).join(' &nbsp;')}
+      ${anyCardio ? '<br>Striped part of a bar = from cardio (10 min ≈ 0.6–1 set).' : ''}</div>
+    ${rows.map(r => `<div class="bal-row" data-muscle="${r.id}" title="${STATUS[r.st].label}${r.c ? ` · ${fmtSets(r.c)} from cardio` : ''}">
+      <span>${MUSCLES[r.id].name}</span>
+      <span class="bar"><i style="width:${((r.n - r.c) / max) * 100}%;background:${STATUS[r.st].color}"></i><i class="cardio" style="left:${((r.n - r.c) / max) * 100}%;width:${(r.c / max) * 100}%;background-color:${STATUS[r.st].color}"></i>${marks}</span>
+      <span class="num">${fmtSets(r.n)}</span>
+    </div>`).join('')}`;
+}
+
+// workout card interactions (delegated)
+workoutsEl.addEventListener('click', ev => {
+  const card = ev.target.closest('[data-wo]');
+  if (!card) return;
+  // form controls (switch, name, numbers) are handled by the "change" listener; re-rendering here
+  // would replace the switch before its click lands, so leave them alone
+  if (ev.target.closest('label, input, select')) return;
+  const w = findWorkout(card.dataset.wo), act = ev.target.closest('[data-act]')?.dataset.act;
+  if (act === 'del') {
+    if (w.items.length && !confirm(`Delete "${w.name}"?`)) return;
+    schedule.workouts = schedule.workouts.filter(x => x !== w);
+    if (schedule.target === w.id) schedule.target = schedule.workouts[0]?.id || null;
+  } else if (act === 'rm') {
+    w.items.splice(+ev.target.closest('[data-i]').dataset.i, 1);
+  } else if (!act) {
+    schedule.target = w.id;   // clicking a card makes it the target for the + buttons
+  } else return;
+  saveSchedule(); scheduleChanged();
+});
+workoutsEl.addEventListener('change', ev => {
+  const card = ev.target.closest('[data-wo]'), act = ev.target.dataset.act;
+  if (!card || !act) return;
+  const w = findWorkout(card.dataset.wo);
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(+v) || lo));
+  if (act === 'toggle') w.on = ev.target.checked;
+  if (act === 'name') w.name = ev.target.value.trim() || 'Workout';
+  if (act === 'freq') w.freq = clamp(ev.target.value, 1, 7);
+  if (act === 'amount') {
+    const it = w.items[+ev.target.closest('[data-i]').dataset.i];
+    if (isTimed(exByName[it.ex])) it.min = clamp(ev.target.value, 1, 600); else it.sets = clamp(ev.target.value, 1, 20);
+  }
+  saveSchedule(); scheduleChanged();
+});
+// drag & drop: new exercises from the right panel ("text/plain" = exercise index),
+// or existing workout items via their ⠿ handle ("application/x-item" = {wo, i}) to reorder / move them
+const ITEM_TYPE = 'application/x-item';
+const clearDropMarks = () => workoutsEl.querySelectorAll('.drag, .drop-before').forEach(el => el.classList.remove('drag', 'drop-before'));
+
+workoutsEl.addEventListener('dragstart', ev => {
+  const row = ev.target.closest('.handle') && ev.target.closest('[data-i]');
+  if (!row) return;
+  ev.dataTransfer.setData(ITEM_TYPE, JSON.stringify({ wo: row.closest('[data-wo]').dataset.wo, i: +row.dataset.i }));
+  ev.dataTransfer.effectAllowed = 'move';
+  ev.dataTransfer.setDragImage(row, 10, 10);
+  row.classList.add('dragging');
+});
+workoutsEl.addEventListener('dragend', () => {
+  workoutsEl.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+  clearDropMarks();
+});
+workoutsEl.addEventListener('dragover', ev => {
+  const card = ev.target.closest('[data-wo]');
+  if (!card) return;
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = ev.dataTransfer.types.includes(ITEM_TYPE) ? 'move' : 'copy';
+  clearDropMarks();
+  card.classList.add('drag');
+  // show where it will land: before the hovered row (or after it, when in its lower half)
+  const row = ev.target.closest('[data-i]');
+  if (row) {
+    const r = row.getBoundingClientRect();
+    const before = ev.clientY < r.top + r.height / 2 ? row : row.nextElementSibling;
+    if (before && before.matches('[data-i]')) before.classList.add('drop-before');
+  }
+});
+workoutsEl.addEventListener('dragleave', ev => {
+  const card = ev.target.closest('[data-wo]');
+  if (card && !card.contains(ev.relatedTarget)) clearDropMarks();
+});
+workoutsEl.addEventListener('drop', ev => {
+  const card = ev.target.closest('[data-wo]');
+  if (!card) return;
+  ev.preventDefault();
+  const w = findWorkout(card.dataset.wo);
+  // insert position = index of the row marked "drop-before", or the end of the list
+  const mark = card.querySelector('.drop-before');
+  let at = mark ? +mark.dataset.i : w.items.length;
+  clearDropMarks();
+
+  const moved = ev.dataTransfer.getData(ITEM_TYPE);
+  if (moved) {
+    const { wo, i } = JSON.parse(moved), src = findWorkout(wo);
+    const [item] = src.items.splice(i, 1);
+    if (src === w && i < at) at--;    // removing it shifted the positions below it
+    if (src !== w && w.items.some(it => it.ex === item.ex)) { src.items.splice(i, 0, item); return; } // already there
+    w.items.splice(at, 0, item);
+    schedule.target = w.id;
+    saveSchedule(); scheduleChanged(w.id, item.ex);
+    return;
+  }
+  const ex = EXERCISES[+ev.dataTransfer.getData('text/plain')];
+  if (!ex || w.items.some(it => it.ex === ex.name)) return;
+  w.items.splice(at, 0, newItem(ex));
+  schedule.target = w.id;
+  saveSchedule(); scheduleChanged(w.id, ex.name);
+});
+
+// export / import the schedule as a json file (backup, or to move it to another browser)
+document.getElementById('export').addEventListener('click', () => {
+  // the profile name travels with the file so an import can restore it into the right profile
+  const blob = new Blob([JSON.stringify({ profile: activeProfile().name, ...schedule }, null, 2)], { type: 'application/json' });
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: `muscle-map-${activeProfile().name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${new Date().toISOString().slice(0, 10)}.json`,
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+const importFile = document.getElementById('import-file');
+document.getElementById('import').addEventListener('click', () => importFile.click());
+importFile.addEventListener('change', async () => {
+  const file = importFile.files[0];
+  importFile.value = '';
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data.workouts)) throw new Error('no workouts in file');
+    // a file that names another profile can go into that profile (created if it does not exist yet)
+    const name = typeof data.profile === 'string' ? data.profile.trim() : '';
+    if (name && name !== activeProfile().name &&
+        confirm(`This file is "${name}"'s schedule. Import it into profile "${name}"?\n(It is created if missing, or its schedule is replaced.)\n\nCancel = import into the current profile instead.`)) {
+      let prof = profiles.list.find(x => x.name === name);
+      if (!prof) { prof = { id: uid(), name }; profiles.list.push(prof); }
+      switchProfile(prof.id);
+    } else if (!confirm(`Replace the schedule of "${activeProfile().name}" with "${file.name}" (${data.workouts.length} workouts)?`)) return;
+    schedule.workouts = data.workouts;
+    schedule.target = data.target || data.workouts[0]?.id || null;
+    saveSchedule(); scheduleChanged();
+  } catch (e) {
+    alert('Could not import this file: ' + e.message);
+  }
+});
+document.getElementById('add-workout').addEventListener('click', () => {
+  const name = 'Workout ' + String.fromCharCode(65 + (schedule.workouts.length % 26));
+  const w = { id: uid(), name, freq: 1, on: true, items: [] };
+  schedule.workouts.push(w);
+  schedule.target = w.id;
+  saveSchedule(); scheduleChanged();
+});
+// profile picker: switch / add / rename / delete people
+const profileSel = document.getElementById('profile');
+function renderProfiles() {
+  profileSel.innerHTML = profiles.list.map(p =>
+    `<option value="${p.id}" ${p.id === profiles.active ? 'selected' : ''}>${esc(p.name)}</option>`).join('') +
+    '<option disabled>──────────</option><option value="__new">+ New profile…</option><option value="__rename">Rename current…</option>' +
+    (profiles.list.length > 1 ? '<option value="__delete">Delete current…</option>' : '');
+}
+function switchProfile(id) {
+  profiles.active = id;
+  saveProfiles();
+  const s = loadSchedule();
+  schedule.workouts = s.workouts;
+  schedule.target = s.target;
+  state.previewEx = null;
+  renderProfiles();
+  scheduleChanged();
+}
+profileSel.addEventListener('change', () => {
+  const v = profileSel.value, cur = activeProfile();
+  if (v === '__new') {
+    const name = (prompt('Name of the new profile:') || '').trim();
+    if (name) {
+      const p = { id: uid(), name };
+      profiles.list.push(p);
+      switchProfile(p.id);   // starts with an empty schedule
+      return;
+    }
+  } else if (v === '__rename') {
+    const name = (prompt('New name:', cur.name) || '').trim();
+    if (name) { cur.name = name; saveProfiles(); }
+  } else if (v === '__delete') {
+    if (confirm(`Delete profile "${cur.name}" and its schedule? (Export it first if you want a backup.)`)) {
+      try { localStorage.removeItem(scheduleKey(cur.id)); } catch { /* ignore */ }
+      profiles.list = profiles.list.filter(p => p !== cur);
+      switchProfile(profiles.list[0].id);
+      return;
+    }
+  } else if (v && v !== profiles.active) {
+    switchProfile(v);
+    return;
+  }
+  renderProfiles();   // reset the picker after a menu action
+});
+
+// ======================= cloud sync (optional) =======================
+// signed in with google, a person's profiles and schedules are kept in one firestore document
+// (users/<uid>), so the same schedule shows up on every device they sign in on.
+// without FIREBASE_CONFIG (or when opened from file://) the app stays local-only and the button is hidden.
+const FIREBASE_CONFIG = null;   // paste the web app config from the firebase console here
+const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/10.12.2/';
+const syncBtn = document.getElementById('sync');
+let fb = null, syncUser = null, syncTimer = null, syncState = '', applyingRemote = false, justSignedIn = false;
+
+// everything that syncs: the profile list and every profile's schedule (the active profile stays per device)
+function localData() {
+  const schedules = {};
+  for (const p of profiles.list) {
+    try { const s = JSON.parse(localStorage.getItem(scheduleKey(p.id))); if (s) schedules[p.id] = s; } catch { /* skip */ }
+  }
+  schedules[profiles.active] = { workouts: schedule.workouts, target: schedule.target };
+  return { profiles: profiles.list, schedules };
+}
+const hasWorkouts = d => Object.values(d.schedules).some(s => s.workouts?.some(w => w.items.length));
+
+function renderSyncBtn() {
+  syncBtn.textContent = syncUser ? `☁ ${syncState || 'Synced'}` : 'Sign in to sync';
+  syncBtn.title = syncUser ? `Synced with ${syncUser.email}. Click to sign out.` : 'Sign in with Google to keep your schedule on all your devices';
+}
+const setSyncState = s => { syncState = s; renderSyncBtn(); };
+
+// local edits are sent 1.5 s after the last change, so typing or dragging does not write on every step
+function queueSync() {
+  if (!syncUser || applyingRemote) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(pushSync, 1500);
+  setSyncState('Saving…');
+}
+async function pushSync() {
+  clearTimeout(syncTimer);
+  syncTimer = null;
+  try {
+    // stored as a json string: firestore cannot hold every shape of nested arrays and rejects undefined values
+    await fb.setDoc(fb.doc(fb.db, 'users', syncUser.uid), { data: JSON.stringify(localData()), updated: fb.serverTimestamp() });
+    setSyncState('Synced');
+  } catch (e) {
+    console.warn('sync failed', e);
+    setSyncState('Sync failed');
+  }
+}
+
+// replace this browser's profiles and schedules with the ones from the account
+function applyRemote(d) {
+  if (!Array.isArray(d.profiles) || !d.profiles.length) return;
+  applyingRemote = true;   // the saves below must not be sent back
+  profiles.list = d.profiles;
+  for (const [id, s] of Object.entries(d.schedules || {})) {
+    try { localStorage.setItem(scheduleKey(id), JSON.stringify(s)); } catch { /* not persisted */ }
+  }
+  if (!profiles.list.some(p => p.id === profiles.active)) profiles.active = profiles.list[0].id;
+  switchProfile(profiles.active);   // reloads the schedule and re-renders
+  applyingRemote = false;
+}
+
+async function initSync() {
+  if (!FIREBASE_CONFIG || location.protocol === 'file:') return;
+  const [app, auth, fs] = await Promise.all(['firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js'].map(f => import(FIREBASE_SDK + f)));
+  const fapp = app.initializeApp(FIREBASE_CONFIG);
+  fb = { ...auth, ...fs, auth: auth.getAuth(fapp), db: fs.getFirestore(fapp) };
+  syncBtn.hidden = false;
+  renderSyncBtn();
+  let unsub = null;
+  fb.onAuthStateChanged(fb.auth, user => {
+    syncUser = user;
+    if (unsub) { unsub(); unsub = null; }
+    setSyncState('');
+    if (!user) return;
+    let first = true;
+    // live updates: an edit on the phone shows up on the open laptop tab and the other way round
+    unsub = fb.onSnapshot(fb.doc(fb.db, 'users', user.uid), snap => {
+      const isFirst = first;
+      first = false;
+      if (snap.metadata.hasPendingWrites || syncTimer) return;   // our own write, or local edits not sent yet
+      if (!snap.exists()) { if (isFirst) pushSync(); return; }   // new account: upload this browser's schedules
+      const raw = snap.data().data;
+      if (raw === JSON.stringify(localData())) return;
+      // right after signing in on a browser that already has workouts, let the person pick which copy wins
+      if (isFirst && justSignedIn && hasWorkouts(localData()) &&
+          !confirm('Your account already has a saved schedule.\n\nOK = load it on this device (replaces the schedule here).\nCancel = keep this device\'s schedule and save it to your account.')) {
+        pushSync();
+      } else {
+        applyRemote(JSON.parse(raw));
+      }
+      justSignedIn = false;
+    }, e => { console.warn('sync failed', e); setSyncState('Sync failed'); });
+  });
+}
+
+syncBtn.addEventListener('click', async () => {
+  if (!fb) return;
+  if (syncUser) {
+    if (confirm(`Sign out ${syncUser.email}? Your schedule stays saved in your account and in this browser.`)) fb.signOut(fb.auth);
+    return;
+  }
+  try {
+    justSignedIn = true;
+    await fb.signInWithPopup(fb.auth, new fb.GoogleAuthProvider());
+  } catch (e) {
+    justSignedIn = false;
+    if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') alert('Sign-in failed: ' + e.message);
+  }
+});
+// send pending edits right away when the tab is closed or the phone switches apps
+document.addEventListener('visibilitychange', () => { if (document.hidden && syncTimer) pushSync(); });
+
+// ready-made routines (window.ROUTINES in data.js) are added as a new workout
+const routineSel = document.getElementById('routine');
+routineSel.insertAdjacentHTML('beforeend', (window.ROUTINES || []).map((r, i) =>
+  `<option value="${i}" title="${esc(r.note || '')}">${esc(r.name)}</option>`).join(''));
+routineSel.addEventListener('change', () => {
+  const r = window.ROUTINES[+routineSel.value];
+  routineSel.value = '';
+  if (!r) return;
+  const w = { id: uid(), name: r.name, freq: r.freq || 1, on: true,
+    items: r.items.filter(it => exByName[it.ex]).map(it => ({ ...it })) };
+  schedule.workouts.push(w);
+  schedule.target = w.id;
+  saveSchedule(); scheduleChanged();
+});
+
+// highlight exercises (left workouts + right list) that train the hovered or selected muscle
+function markExercises() {
+  const id = state.hover && !state.hover.startsWith('z:') ? state.hover : state.muscle;
+  const roleIn = ex => !id || !ex ? null : ex.p.includes(id) ? 'hl-p' : ex.s.includes(id) ? 'hl-s' : null;
+  const mark = (el, ex) => {
+    const r = roleIn(ex);
+    el.classList.toggle('hl-p', r === 'hl-p');
+    el.classList.toggle('hl-s', r === 'hl-s');
+  };
+  workoutsEl.querySelectorAll('.wo-item[data-name]').forEach(el => mark(el, exByName[el.dataset.name]));
+  listEl.querySelectorAll('.ex[data-ex]').forEach(el => mark(el, EXERCISES[+el.dataset.ex]));
+}
+
+// hovering an exercise (workouts or exercise list) previews its muscles on the body
+function setPreview(ex) {
+  if (ex !== state.previewEx) { state.previewEx = ex || null; refresh(); }
+}
+listEl.addEventListener('mouseover', ev => {
+  const el = ev.target.closest('.ex[data-ex]');
+  setPreview(el ? EXERCISES[+el.dataset.ex] : null);
+});
+listEl.addEventListener('mouseleave', () => setPreview(null));
+workoutsEl.addEventListener('mouseover', ev => {
+  const el = ev.target.closest('.wo-item[data-name]');
+  setPreview(el ? exByName[el.dataset.name] : null);
+});
+workoutsEl.addEventListener('mouseleave', () => setPreview(null));
+
+// balance rows: hover highlights the muscle on the body, click selects it
+balanceEl.addEventListener('mouseover', ev => {
+  const row = ev.target.closest('[data-muscle]');
+  const id = row ? row.dataset.muscle : null;
+  if (id !== state.hover) { state.hover = id; refresh(); }
+});
+balanceEl.addEventListener('mouseleave', () => { state.hover = null; refresh(); });
+balanceEl.addEventListener('click', ev => {
+  const row = ev.target.closest('[data-muscle]');
+  if (row) selectMuscle(row.dataset.muscle);
+});
+// show / hide the schedule pane
+document.getElementById('sched-close').addEventListener('click', () => document.body.classList.add('sched-closed'));
+document.getElementById('sched-open').addEventListener('click', () => document.body.classList.remove('sched-closed'));
+
+// ======================= render loop =======================
+function resize() {
+  const w = viewer.clientWidth, h = viewer.clientHeight;
+  renderer.setSize(w, h, false);
+  const pr = renderer.getPixelRatio();
+  // border id buffer at 2x the screen resolution (capped) for smooth lines
+  const iw = Math.min(Math.round(w * pr * 2), 4096), ih = Math.min(Math.round(h * pr * 2), 4096);
+  idTarget.setSize(iw, ih);
+  edgeMat.uniforms.texel.value.set(1 / iw, 1 / ih);
+  camera.aspect = w / h;
+  // pull the camera back on narrow/short screens so the whole body fits
+  camera.fov = w / h < 0.8 ? 42 : 32;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(viewer);
+resize();
+
+const clock = new THREE.Clock();
+function loop() {
+  requestAnimationFrame(loop);
+  // time-based easing factor so camera moves take ~1s regardless of frame rate
+  const k = 1 - Math.exp(-clock.getDelta() * 6);
+  if (camGoal !== null) {
+    // ease the camera along the orbit towards the requested side, levelling it out
+    controls.target.lerp(TARGET, k);
+    const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
+    const diff = Math.atan2(Math.sin(camGoal - sph.theta), Math.cos(camGoal - sph.theta));
+    sph.theta += diff * k;
+    sph.phi += (Math.PI / 2 - 0.03 - sph.phi) * k;
+    camera.position.setFromSpherical(sph).add(controls.target);
+    if (Math.abs(diff) < 0.002) camGoal = null;
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  if (loaded) { renderBorders(); processThumbs(); }
+}
+
+// remember interface settings between visits (schedule pane open, x-ray, exercise filter)
+const UI_KEY = 'muscle-map-ui-v1';
+try {
+  const ui = JSON.parse(localStorage.getItem(UI_KEY)) || {};
+  if (ui.schedOpen === false) document.body.classList.add('sched-closed');
+  if (typeof ui.xray === 'boolean') state.xray = ui.xray;
+  if (ui.group === 'All' || GROUPS.includes(ui.group)) state.group = ui.group;
+} catch { /* storage unavailable: use defaults */ }
+// any click may change a setting; this listener runs after the specific handlers
+document.addEventListener('click', () => {
+  try {
+    localStorage.setItem(UI_KEY, JSON.stringify({
+      schedOpen: !document.body.classList.contains('sched-closed'), xray: state.xray, group: state.group,
+    }));
+  } catch { /* not persisted */ }
+});
+
+renderPanel();
+renderProfiles();
+renderSchedule();
+initSync().catch(e => console.warn('cloud sync unavailable', e));
+loop();
+</script>
+</body>
+</html>
