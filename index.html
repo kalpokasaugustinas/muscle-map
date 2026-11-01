@@ -1422,7 +1422,7 @@ async function pushSync() {
   syncTimer = null;
   try {
     // stored as a json string: firestore cannot hold every shape of nested arrays and rejects undefined values
-    await fb.setDoc(fb.doc(fb.db, 'users', syncUser.uid), { data: JSON.stringify(localData()), updated: fb.serverTimestamp() });
+    await fb.setDoc(fb.doc(fb.db, 'users', syncUser.uid), { data: JSON.stringify(localData()), updated: fb.serverTimestamp() }, { merge: true });   // merge: other apps (pedal quest) keep their fields in this document
     setSyncState('Synced');
   } catch (e) {
     console.warn('sync failed', e);
@@ -1462,7 +1462,7 @@ async function initSync() {
       const isFirst = first;
       first = false;
       if (snap.metadata.hasPendingWrites || syncTimer) return;   // our own write, or local edits not sent yet
-      if (!snap.exists()) { if (isFirst) pushSync(); return; }   // new account: upload this browser's schedules
+      if (!snap.exists() || snap.data().data === undefined) { if (isFirst) pushSync(); return; }   // new account (or only other apps' data): upload this browser's schedules
       const raw = snap.data().data;
       if (raw === JSON.stringify(localData())) return;
       // right after signing in on a browser that already has workouts, let the person pick which copy wins
