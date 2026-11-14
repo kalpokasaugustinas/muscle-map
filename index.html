@@ -471,6 +471,7 @@ loader.parse(base64ToBuffer(window.BODY_GLB), '', gltf => {
   model.position.set(-center.x * s, -box.min.y * s, -center.z * s);
   scene.add(model);
   model.updateMatrixWorld(true);
+  bodyModel = model;
 
   const all = [];
   model.traverse(o => { if (o.isMesh) all.push(o); });
@@ -551,6 +552,7 @@ loader.parse(base64ToBuffer(window.BODY_GLB), '', gltf => {
     const head = new THREE.Mesh(g, headMat);
     head.userData.idMat = idColor(252, 0, 0);
     scene.add(head);
+    headMesh = head;
     solids.push(head); drawables.push(head);
   }
 
@@ -580,10 +582,11 @@ function withPass(matFor, draw) {
     if (mat) { m.material = mat; m.visible = true; } else m.visible = false;
   }
   const bg = scene.background, cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha();
-  scene.background = null; floor.visible = false;
+  const gearShown = gear.visible;   // bench + barbell of an acted-out exercise: not part of the passes
+  scene.background = null; floor.visible = false; gear.visible = false;
   renderer.setClearColor(0x000000, 0);
   draw();
-  renderer.setClearColor(cc, ca); scene.background = bg; floor.visible = true;
+  renderer.setClearColor(cc, ca); scene.background = bg; floor.visible = true; gear.visible = gearShown;
   drawables.forEach((m, i) => { m.material = saved[i][0]; m.visible = saved[i][1]; });
   renderer.setRenderTarget(null);
 }
@@ -618,10 +621,15 @@ edgeScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), edgeMat));
 const edgeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
 function renderBorders() {
+  const gearOn = gear.visible;
   withPass(m => (m.visible && !m.userData.ghost ? m.userData.idMat : null), () => {
+    // the bench and barbell count as one solid, so muscle lines don't show through them
+    const mats = gearOn ? gearMeshes.map(g => g.material) : null;
+    if (gearOn) { gear.visible = true; gearMeshes.forEach(g => { g.material = gearIdMat; }); }
     renderer.setRenderTarget(idTarget);
     renderer.clear();
     renderer.render(scene, camera);
+    if (mats) gearMeshes.forEach((g, i) => { g.material = mats[i]; });
   });
   renderer.autoClear = false;
   renderer.render(edgeScene, edgeCam);
@@ -636,7 +644,8 @@ const layerCache = [];  // layerCache[n] = set of muscles peeled away when showi
 
 function visibleMuscles(excluded) {
   const counts = new Uint32Array(muscles.length + 1), buf = new Uint8Array(LAYER_RES * LAYER_RES * 4);
-  withPass(m => (m.userData.layerMat && !excluded.has(m) ? m.userData.layerMat : null), () => {
+  // layers are worked out on the standing body, also while an exercise is acted out
+  withRestPose(() => withPass(m => (m.userData.layerMat && !excluded.has(m) ? m.userData.layerMat : null), () => {
     renderer.setRenderTarget(layerTarget);
     for (let az = 0; az < 8; az++) for (const el of [-0.5, 0, 0.5]) {
       const a = az * Math.PI / 4;
@@ -649,7 +658,7 @@ function visibleMuscles(excluded) {
         if (buf[i + 2] === 0) { const k = buf[i] | (buf[i + 1] << 8); if (k) counts[k]++; }
       }
     }
-  });
+  }));
   return new Set(muscles.filter((m, i) => !excluded.has(m) && counts[i + 1] >= VISIBLE_PX));
 }
 
@@ -692,7 +701,8 @@ function renderThumb(ex) {
     return tendons.includes(m) ? THUMB_MATS.tendon : m.material;   // bones / head keep their look
   };
   const w = thumbTarget.width, h = thumbTarget.height;
-  withPass(matFor, () => {
+  // thumbnails always show the standing body, also while an exercise is acted out
+  withRestPose(() => withPass(matFor, () => {
     renderer.setRenderTarget(thumbTarget);
     renderer.clear();
     renderer.autoClear = false;
@@ -707,7 +717,7 @@ function renderThumb(ex) {
     renderer.autoClear = true;
     thumbTarget.viewport.set(0, 0, w, h);
     renderer.readRenderTargetPixels(thumbTarget, 0, 0, w, h, thumbPixels);
-  });
+  }));
   // webgl rows start at the bottom: flip them into the 2d canvas
   const img = thumbCtx.createImageData(w, h);
   for (let y = 0; y < h; y++) img.data.set(thumbPixels.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
@@ -731,6 +741,404 @@ function processThumbs() {
     thumbCache.set(name, renderThumb(ex));
     document.querySelectorAll(`img.thumb[data-thumb="${CSS.escape(name)}"]`).forEach(img => { img.src = thumbCache.get(name); });
   }
+}
+
+// ======================= exercise animation =======================
+// selecting an exercise that has a motion here makes the 3d body act it out: slowly and in a loop, with the
+// trained muscles highlighted as usual (only the barbell bench press so far).
+// the anatomy model has no skeleton, so a simple one is built the first time it is needed (buildRig):
+//   - joint centres (shoulder, elbow, wrist, knuckles, hip, knee, ankle) come from the bone meshes
+//   - every vertex gets skin weights from where it sits (trunk, upper arm, forearm, hand, fingers, thigh, shin)
+//   - meshes that bend become skinned meshes; everything else just follows the whole body
+// bone matrices are world-space moves away from the standing pose, so the bone inverses are identity.
+const MOTIONS = {
+  'Barbell bench press': {
+    pose: benchPose,
+    period: 5.5,   // seconds per rep (down + up)
+    // 3/4 view from the head side and a bit from above: chest and arms in front, the plates off to the side
+    view: { theta: -0.6, phi: 0.98, dist: 30, target: new THREE.Vector3(-0.5, 7, 0) },
+  },
+};
+const motionOf = ex => (ex && MOTIONS[ex.name]) || null;
+const TARGET_REST = TARGET.clone();
+const LEVEL_PHI = Math.PI / 2 - 0.03;
+let camPhi = LEVEL_PHI;   // camera height (polar angle) the camera eases to, see loop()
+let camDist = null;       // camera distance it eases to (null = keep the user's zoom)
+const REST_DIST = 36;
+// exercise view distance: the view's own distance, or further back when the viewer is narrow (about 18 units must fit across)
+const viewDist = view => Math.max(view.dist, 9 / (Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
+let bodyModel = null, headMesh = null;
+let rig = null;      // skeleton + joint data, built on first use
+let motion = null;   // { def, t, blend, shown, leaving } while an exercise is acted out (or blending back)
+const gear = new THREE.Group();   // bench + barbell
+gear.visible = false;
+scene.add(gear);
+const gearMeshes = [];
+const gearIdMat = idColor(253, 0, 0);
+
+// bone slots: 0 = trunk (the whole body), then 7 per side (j = 0 left / +x, j = 1 right / -x)
+const UPPER = 0, FORE = 1, HAND = 2, FING1 = 3, FING2 = 4, THIGH = 5, SHIN = 6;
+const boneIx = (j, k) => 1 + j * 7 + k;
+const BONE_PARENT = [-1];
+for (let j = 0; j < 2; j++) BONE_PARENT.push(0, boneIx(j, UPPER), boneIx(j, FORE), boneIx(j, HAND), boneIx(j, FING1), 0, boneIx(j, THIGH));
+
+// mesh groups for the skin weights (anatomical names from the model)
+const ARM_RE = /humerus|radius|ulna|carp|of hand|biceps brachii|triceps|coracobrachialis|brachialis|anconeus/i;
+const THUMB_RE = /first finger of hand|first metacarpal|pollicis/i;   // the thumb stays with the hand
+const DELTOID_RE = /deltoid/i;
+const SHOULDER_RE = /pectoralis major|latissimus|teres major/i;        // trunk muscles that pull on the upper arm
+const CUFF_RE = /teres minor|infraspinatus|supraspinatus|subscapularis/i;
+const PELVIS_RE = /^(hip bone|sacrum|coccyx)/i;
+
+const V3 = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+const AXIS_X = V3(1, 0, 0), AXIS_Z = V3(0, 0, 1);
+// smooth 0..1 ramp from a to b (b < a ramps the other way)
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+// unit part of v at right angles to a unit axis
+const perpTo = (v, axis) => v.clone().addScaledVector(axis, -v.dot(axis)).normalize();
+
+function buildRig() {
+  bodyModel.updateMatrixWorld(true);
+  // world positions of every vertex of the meshes whose name matches
+  const pointsOf = re => {
+    const out = [];
+    for (const m of drawables) {
+      if (!re.test(m.userData.zname || '')) continue;
+      const pos = m.geometry.attributes.position;
+      for (let i = 0; i < pos.count; i++) out.push(V3().fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld));
+    }
+    return out;
+  };
+  const mean = ps => ps.reduce((a, p) => a.add(p), V3()).divideScalar(Math.max(ps.length, 1));
+  // centre of the points within d of the top (dir 1) or the bottom (dir -1) of a set
+  const endOf = (ps, dir, d) => {
+    const ys = ps.map(p => p.y), lim = dir > 0 ? Math.max(...ys) - d : Math.min(...ys) + d;
+    return mean(ps.filter(p => (dir > 0 ? p.y >= lim : p.y <= lim)));
+  };
+
+  // ---- joints per side ----
+  const sides = [0, 1].map(j => {
+    const sfx = j ? 'r' : 'l', sg = j ? -1 : 1, re = n => new RegExp(`^${n}\\.${sfx}$`, 'i');
+    const hum = pointsOf(re('Humerus'));
+    const S = endOf(hum, 1, 0.45), E = endOf(hum, -1, 0.25);
+    const W = endOf(pointsOf(re('(Radius|Ulna)')), -1, 0.2);
+    const K = mean(['Second', 'Third', 'Fourth', 'Fifth'].map(n => endOf(pointsOf(re(n + ' metacarpal bone')), -1, 0.12)));
+    const J = mean(['second', 'third', 'fourth', 'fifth'].map(n => endOf(pointsOf(re(`Proximal phalanx of ${n} finger of hand`)), -1, 0.1)));
+    const fem = pointsOf(re('Femur')), tib = pointsOf(re('Tibia'));
+    const fTop = Math.max(...fem.map(p => p.y)), fIn = Math.min(...fem.map(p => sg * p.x));
+    const H = mean(fem.filter(p => p.y > fTop - 0.45 && sg * p.x < fIn + 0.5));   // femoral head (top, inner side)
+    const Kn = endOf(fem, -1, 0.2).add(endOf(tib, 1, 0.2)).multiplyScalar(0.5);
+    const A = mean(pointsOf(re('Talus')));
+    const a0 = E.clone().sub(S).normalize(), f0 = W.clone().sub(E).normalize(), h0 = K.clone().sub(W).normalize();
+    const palmH = perpTo(AXIS_Z, h0);
+    return {
+      sg, S, E, W, K, J, H, Kn, A, a0, f0, h0,
+      L1: S.distanceTo(E), L2: E.distanceTo(W), lp: K.distanceTo(J),
+      n0: perpTo(AXIS_Z, a0),                    // the elbow bends forwards in the standing pose
+      nE: a0.clone().add(f0).normalize(),        // normal of the plane that splits upper arm and forearm
+      p0: perpTo(AXIS_Z, f0),                    // palm faces forwards in the standing pose
+      k0: h0.clone().cross(palmH).normalize(),   // finger hinge axis (positive angle curls towards the palm)
+      G0: K.clone().addScaledVector(h0, 0.08).addScaledVector(palmH, 0.3),   // where a bar sits in the closed hand
+    };
+  });
+
+  // ---- bench numbers: the back lies on the bench, the bar comes down to the lower chest ----
+  let zBack = Infinity;
+  const p = V3(), d = V3();
+  for (const m of drawables) {
+    const pos = m.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      p.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      if (p.y > 8.5 && p.y < 15 && Math.abs(p.x) < 1.6) zBack = Math.min(zBack, p.z);
+    }
+  }
+  const pec = pointsOf(/^Sternocostal head of pectoralis major/i);
+  const yBot = Math.min(...pec.map(q => q.y)) + 0.4;
+  const zChest = Math.max(...pec.filter(q => Math.abs(q.y - yBot) < 0.2).map(q => q.z));
+  const benchY = 4.5, tx = 11.3, ty = benchY - zBack;   // 4.5 units = 45 cm bench height
+  // lying on the back: body x -> world -z, body y (head) -> world -x, body z (front) -> world up
+  const lie = new THREE.Matrix4().makeBasis(V3(0, 0, -1), V3(-1, 0, 0), V3(0, 1, 0)).setPosition(tx, ty, 0);
+  const lieQ = new THREE.Quaternion().setFromRotationMatrix(lie), liePos = V3(tx, ty, 0);
+  // bar path: on the chest at the bottom, over the shoulders with almost straight arms at the top
+  const L = sides[0], gripX = 2.75;
+  const yTop = L.S.y - 0.15, reach = 0.97 * (L.L1 + L.L2) + 0.9 * L.G0.distanceTo(L.W);
+  const dx = gripX - L.S.x, dy = yTop - L.S.y;
+  const bar = { gripX, yTop, zTop: L.S.z + Math.sqrt(Math.max(1, reach * reach - dx * dx - dy * dy)), yBot, zBot: zChest + 0.16 };
+
+  // ---- legs: knees bent, shins upright, feet flat on the floor (the same through the whole rep) ----
+  const legs = sides.map(s => {
+    const apart = new THREE.Quaternion().setFromAxisAngle(AXIS_Z, s.sg * 0.35);   // legs ~20° apart
+    const shinQ = apart.clone().multiply(new THREE.Quaternion().setFromAxisAngle(AXIS_X, Math.PI / 2));
+    // hip angle that puts the ankle at its standing height above the floor (bisection)
+    let lo = -0.3, hi = 1.2, thighQ = null;
+    for (let it = 0; it < 30; it++) {
+      const th = (lo + hi) / 2;
+      thighQ = apart.clone().multiply(new THREE.Quaternion().setFromAxisAngle(AXIS_X, th));
+      const knee = s.Kn.clone().sub(s.H).applyQuaternion(thighQ).add(s.H);
+      const ankleZ = knee.z + s.A.clone().sub(s.Kn).applyQuaternion(shinQ).z;
+      if (ankleZ + ty > s.A.y) lo = th; else hi = th;   // a larger angle lowers the knee
+    }
+    return { thighQ, shinQ };
+  });
+
+  // ---- skeleton + skin weights ----
+  const bones = BONE_PARENT.map(() => { const b = new THREE.Bone(); b.matrixAutoUpdate = false; return b; });
+  const skeleton = new THREE.Skeleton(bones, bones.map(() => new THREE.Matrix4()));
+  const pivot = [V3()];
+  for (const s of sides) pivot.push(s.S, s.E, s.W, s.K, s.J, s.H, s.Kn);
+  const boneMatSk = boneMat.clone(), tendonMatSk = tendonMat.clone();   // skinned meshes get their own copies
+  const geoUsers = new Map();
+  for (const m of drawables) geoUsers.set(m.geometry, (geoUsers.get(m.geometry) || 0) + 1);
+  const wIdx = new Int32Array(16), wVal = new Float32Array(16);
+  let wN = 0;
+  const add = (b, w) => { if (w > 1e-3) { wIdx[wN] = b; wVal[wN] = w; wN++; } };
+  const swaps = new Map();   // standing mesh -> skinned mesh
+
+  for (const m of [...drawables]) {
+    const name = m.userData.zname || '';
+    const box = new THREE.Box3().setFromObject(m);
+    const cx = (box.min.x + box.max.x) / 2, cy = (box.min.y + box.max.y) / 2;
+    const oneSide = box.min.x * box.max.x > 0, inner = Math.min(Math.abs(box.min.x), Math.abs(box.max.x));
+    const kind = m === headMesh || PELVIS_RE.test(name) ? 'trunk'
+      : ARM_RE.test(name) || (oneSide && inner > 1.85 && cy > 6) ? 'arm'
+      : DELTOID_RE.test(name) ? 'deltoid' : SHOULDER_RE.test(name) ? 'shoulder' : CUFF_RE.test(name) ? 'cuff' : 'body';
+    if (kind === 'trunk') continue;
+    const armSide = cx > 0 ? 0 : 1, fingers = !THUMB_RE.test(name);
+    const pos = m.geometry.attributes.position, n = pos.count;
+    const idx = new Uint16Array(n * 4), wt = new Float32Array(n * 4), tot = new Float32Array(bones.length);
+    let moves = false;
+    for (let i = 0; i < n; i++) {
+      p.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      wN = 0;
+      const j = p.x >= 0 ? 0 : 1, s = sides[j];
+      if (kind === 'arm') {
+        const a = sides[armSide], o = boneIx(armSide, 0);
+        const fF = sstep(-0.22, 0.22, d.copy(p).sub(a.E).dot(a.nE));      // forearm share around the elbow
+        const hS = sstep(0.15, 1, d.copy(p).sub(a.E).dot(a.f0) / a.L2);   // hand share: spreads the wrist twist along the forearm
+        const u = d.copy(p).sub(a.K).dot(a.h0);                            // distance past the knuckles
+        const f1 = fingers ? sstep(-0.06, 0.08, u) : 0, f2 = fingers ? sstep(a.lp - 0.06, a.lp + 0.06, u) : 0;
+        add(o + UPPER, 1 - fF); add(o + FORE, fF * (1 - hS)); add(o + HAND, fF * hS * (1 - f1));
+        add(o + FING1, fF * hS * f1 * (1 - f2)); add(o + FING2, fF * hS * f1 * f2);
+      } else if (kind === 'deltoid') {
+        const t = d.copy(p).sub(s.S).dot(s.a0) / s.L1;
+        add(boneIx(j, UPPER), sstep(-0.1, 0.35, t) * sstep(0.9, 1.75, Math.abs(p.x)));
+      } else if (kind === 'shoulder') add(boneIx(j, UPPER), sstep(1.2, 1.95, Math.abs(p.x)));
+      else if (kind === 'cuff') add(boneIx(j, UPPER), sstep(1.55, 2.05, Math.abs(p.x)));
+      else {
+        // legs: everything below the hip joints, split between the sides around the midline
+        const leg = sstep(s.H.y + 0.45, s.H.y - 0.75, p.y);
+        if (leg > 0) {
+          const left = sstep(-0.2, 0.2, p.x);
+          for (const [jj, share] of [[0, left], [1, 1 - left]]) {
+            const sh = sstep(sides[jj].Kn.y + 0.35, sides[jj].Kn.y - 0.35, p.y);
+            add(boneIx(jj, THIGH), leg * share * (1 - sh)); add(boneIx(jj, SHIN), leg * share * sh);
+          }
+        }
+      }
+      // the trunk takes the rest; keep the 4 largest weights
+      let sum = 0;
+      for (let q = 0; q < wN; q++) sum += wVal[q];
+      if (sum > 0.002) moves = true;
+      add(0, 1 - sum);
+      const keep = Math.min(4, wN);
+      for (let a = 0; a < keep; a++) {
+        let best = a;
+        for (let q = a + 1; q < wN; q++) if (wVal[q] > wVal[best]) best = q;
+        [wIdx[a], wIdx[best]] = [wIdx[best], wIdx[a]];
+        [wVal[a], wVal[best]] = [wVal[best], wVal[a]];
+      }
+      let ks = 0;
+      for (let q = 0; q < keep; q++) ks += wVal[q];
+      for (let q = 0; q < keep; q++) { idx[i * 4 + q] = wIdx[q]; wt[i * 4 + q] = wVal[q] / ks; tot[wIdx[q]] += wVal[q]; }
+    }
+    if (!moves) continue;   // rigid part: follows the whole body as it is
+
+    const geo = geoUsers.get(m.geometry) > 1 ? m.geometry.clone() : m.geometry;
+    geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(idx, 4));
+    geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(wt, 4));
+    const sm = new THREE.SkinnedMesh(geo, m.material === boneMat ? boneMatSk : m.material === tendonMat ? tendonMatSk : m.material);
+    sm.name = m.name; sm.userData = m.userData; sm.visible = m.visible;
+    sm.position.copy(m.position); sm.quaternion.copy(m.quaternion); sm.scale.copy(m.scale);
+    sm.frustumCulled = false;   // three's bounds don't follow the pose
+    sm.userData.domBone = tot.indexOf(Math.max(...tot));
+    sm.raycast = posedRaycast;
+    m.parent.add(sm); m.parent.remove(m);
+    sm.updateMatrixWorld(true);
+    sm.bind(skeleton, m.matrixWorld.clone());
+    swaps.set(m, sm);
+  }
+  // point every list at the skinned meshes
+  const swap = list => list.forEach((m, i) => { if (swaps.has(m)) list[i] = swaps.get(m); });
+  [muscles, solids, tendons, drawables, ...Object.values(meshesById)].forEach(swap);
+  for (const [o, nm] of swaps) if (state.hidden.delete(o)) state.hidden.add(nm);
+  layerCache.length = 0;   // held the old meshes; recomputed on demand
+  // the smooth head was added to the scene; move it under the body so it lies down with it
+  if (headMesh) bodyModel.attach(headMesh);
+  bodyModel.matrixAutoUpdate = false;
+
+  const r = {
+    sides, bones, skeleton, pivot, bar, legs, lieQ, liePos, tendonMat: tendonMatSk,
+    modelRest: bodyModel.matrix.clone(), posed: false,
+    R: BONE_PARENT.map(() => new THREE.Quaternion()),   // current exercise pose: absolute rotation per bone
+    barMesh: buildGear(tx - 18.4, tx - 8, benchY),
+  };
+  return r;
+}
+
+// raycasting a skinned mesh: three tests its standing bounds first, so move them with the mesh's main bone
+function posedRaycast(raycaster, intersects) {
+  const geo = this.geometry;
+  if (!geo.boundingSphere) geo.computeBoundingSphere();
+  const c = geo.boundingSphere.center.clone().applyMatrix4(this.bindMatrix)
+    .applyMatrix4(rig.bones[this.userData.domBone].matrixWorld).applyMatrix4(this.bindMatrixInverse);
+  this.boundingSphere = new THREE.Sphere(c, geo.boundingSphere.radius * 1.6);
+  this.boundingBox = null;
+  THREE.SkinnedMesh.prototype.raycast.call(this, raycaster, intersects);
+}
+
+// flat bench (pad from x0 to x1 in world x, top at height y) and a loaded olympic bar; returns the bar group
+function buildGear(x0, x1, y) {
+  const padMat = new THREE.MeshStandardMaterial({ color: '#2b2f36', roughness: 0.65 });
+  const frameMat = new THREE.MeshStandardMaterial({ color: '#3a3f46', metalness: 0.4, roughness: 0.5 });
+  const steel = new THREE.MeshStandardMaterial({ color: '#8b929b', metalness: 0.75, roughness: 0.32 });
+  const plateMat = new THREE.MeshStandardMaterial({ color: '#25282d', roughness: 0.7 });
+  const put = (geo, mat, x, yy, z, parent) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, yy, z);
+    parent.add(m); gearMeshes.push(m);
+    return m;
+  };
+  // cylinder along z (the bar axis)
+  const cyl = (rad, len, seg) => new THREE.CylinderGeometry(rad, rad, len, seg).rotateX(Math.PI / 2);
+  const mid = (x0 + x1) / 2;
+  put(new THREE.BoxGeometry(x1 - x0, 0.5, 2.6), padMat, mid, y - 0.25, 0, gear);
+  put(new THREE.BoxGeometry(x1 - x0 - 1.2, 0.3, 0.6), frameMat, mid, y - 0.68, 0, gear);
+  for (const x of [x0 + 0.9, x1 - 0.9]) {
+    put(new THREE.BoxGeometry(0.35, y - 0.8, 0.35), frameMat, x, (y - 0.8) / 2, 0, gear);
+    put(new THREE.BoxGeometry(0.45, 0.22, 2.8), frameMat, x, 0.11, 0, gear);
+  }
+  // 2.2 m bar: 28 mm shaft, sleeves, collars and two 20 kg plates per side (units are 10 cm)
+  const bar = new THREE.Group();
+  gear.add(bar);
+  put(cyl(0.14, 13.1, 16), steel, 0, 0, 0, bar);
+  for (const sg of [1, -1]) {
+    put(cyl(0.25, 4.45, 16), steel, 0, 0, sg * 8.8, bar);
+    put(cyl(0.42, 0.25, 20), steel, 0, 0, sg * 6.7, bar);
+    put(cyl(2.25, 0.5, 48), plateMat, 0, 0, sg * 7.1, bar);
+    put(cyl(2.25, 0.5, 48), plateMat, 0, 0, sg * 7.65, bar);
+  }
+  return bar;
+}
+
+// bench press pose for u = 0 (arms straight, bar over the shoulders) .. 1 (bar on the lower chest).
+// fills rig.R; the bar curves a little towards the shoulders near the top, like a real bar path.
+function benchPose(u) {
+  const b = rig.bar, v = 1 - u;
+  const y = b.yBot + (b.yTop - b.yBot) * v * v, z = b.zBot + (b.zTop - b.zBot) * v;
+  rig.sides.forEach((s, j) => {
+    solveArm(s, j, V3(s.sg * b.gripX, y, z));
+    rig.R[boneIx(j, THIGH)].copy(rig.legs[j].thighQ);
+    rig.R[boneIx(j, SHIN)].copy(rig.legs[j].shinQ);
+  });
+}
+
+// arm rotations that put the closed hand on the bar (body coordinates of the standing pose):
+// two-bone ik for shoulder + elbow, palm turned towards the feet (overhand grip), fingers curled round the bar
+const _m0 = new THREE.Matrix4(), _m1 = new THREE.Matrix4();
+function solveArm(s, j, barPt) {
+  const pole = V3(s.sg * 0.8, -0.45, -0.6);   // elbows go out, down and a little towards the feet
+  const palmTo = V3(0, -1, 0);
+  const restFrame = _m0.makeBasis(s.a0, s.n0, s.a0.clone().cross(s.n0)).transpose();
+  let Wt = barPt.clone().add(s.W).sub(s.G0), Ru, Rf, Rh;
+  for (let it = 0; it < 4; it++) {
+    const dv = Wt.clone().sub(s.S), dist = Math.min(dv.length(), 0.995 * (s.L1 + s.L2)), dir = dv.normalize();
+    const a = (s.L1 * s.L1 - s.L2 * s.L2 + dist * dist) / (2 * dist), h = Math.sqrt(Math.max(0, s.L1 * s.L1 - a * a));
+    const E = s.S.clone().addScaledVector(dir, a).addScaledVector(perpTo(pole, dir), h);
+    const W = s.S.clone().addScaledVector(dir, dist);
+    const ua = E.clone().sub(s.S).normalize(), uf = W.clone().sub(E).normalize(), un = perpTo(uf, ua);
+    // upper arm: standing frame (axis, bend direction) -> new frame
+    Ru = new THREE.Quaternion().setFromRotationMatrix(_m1.makeBasis(ua, un, ua.clone().cross(un)).multiply(restFrame));
+    // forearm: bend at the elbow; hand: twist about the forearm so the palm faces the feet
+    Rf = new THREE.Quaternion().setFromUnitVectors(s.f0.clone().applyQuaternion(Ru), uf).multiply(Ru);
+    const pc = s.p0.clone().applyQuaternion(Rf), pd = perpTo(palmTo, uf);
+    Rh = new THREE.Quaternion().setFromAxisAngle(uf, Math.atan2(pc.clone().cross(pd).dot(uf), pc.dot(pd))).multiply(Rf);
+    // move the wrist target by how far the grip point missed the bar
+    const G = s.G0.clone().sub(s.W).applyQuaternion(Rh).add(W);
+    Wt = W.add(barPt.clone().sub(G));
+  }
+  const k = s.k0.clone().applyQuaternion(Rh);
+  rig.R[boneIx(j, UPPER)].copy(Ru);
+  rig.R[boneIx(j, FORE)].copy(Rf);
+  rig.R[boneIx(j, HAND)].copy(Rh);
+  rig.R[boneIx(j, FING1)].setFromAxisAngle(k, 1.15).multiply(Rh);
+  rig.R[boneIx(j, FING2)].setFromAxisAngle(k, 2.75).multiply(Rh);
+}
+
+// puts the body in the current exercise pose, blended with the standing pose (b = 0 standing .. 1 exercise).
+// rotations are blended and the joints chained again, so the limbs stay connected while blending.
+const _Rb = BONE_PARENT.map(() => new THREE.Quaternion()), _P = BONE_PARENT.map(() => V3());
+const _L = new THREE.Matrix4(), _D = new THREE.Matrix4(), _lq = new THREE.Quaternion(), _one = V3(1, 1, 1);
+function applyPose(b) {
+  const r = rig;
+  for (let i = 0; i < _Rb.length; i++) {
+    _Rb[i].identity().slerp(r.R[i], b);
+    const par = BONE_PARENT[i];
+    if (par < 0) _P[i].set(0, 0, 0);
+    else _P[i].copy(r.pivot[i]).sub(r.pivot[par]).applyQuaternion(_Rb[par]).add(_P[par]);
+  }
+  _L.compose(V3().lerpVectors(V3(), r.liePos, b), _lq.identity().slerp(r.lieQ, b), _one);
+  bodyModel.matrix.multiplyMatrices(_L, r.modelRest);
+  bodyModel.updateMatrixWorld(true);
+  for (let i = 0; i < _Rb.length; i++) {
+    _D.makeRotationFromQuaternion(_Rb[i]).setPosition(_P[i].clone().sub(r.pivot[i].clone().applyQuaternion(_Rb[i])));
+    r.bones[i].matrixWorld.multiplyMatrices(_L, _D);
+  }
+  r.skeleton.update();
+  r.posed = b > 0;
+  // barbell: between the two grip points
+  const g = r.sides.map((s, j) => {
+    const h = boneIx(j, HAND);
+    return s.G0.clone().sub(s.W).applyQuaternion(_Rb[h]).add(_P[h]).applyMatrix4(_L);
+  });
+  r.barMesh.position.lerpVectors(g[0], g[1], 0.5);
+  r.barMesh.quaternion.setFromUnitVectors(AXIS_Z, g[1].clone().sub(g[0]).normalize());
+}
+
+// draws something in the standing pose (thumbnails, layer detection), then goes back to the current pose
+function withRestPose(fn) {
+  if (!rig || !rig.posed) return fn();
+  applyPose(0);
+  try { return fn(); } finally { applyPose(motion ? motion.shown : 0); }
+}
+
+// called every frame: starts / runs / ends the motion of the selected exercise
+function updateMotion(dt) {
+  const def = motionOf(state.exercise);
+  if (def && (!motion || motion.def !== def || motion.leaving)) {
+    if (!rig) { rig = buildRig(); refresh(); }   // refresh: colours / see-through for the new skinned meshes
+    motion = { def, t: motion && motion.def === def ? motion.t : 0, blend: motion ? motion.blend : 0, shown: 0, leaving: false };
+    TARGET.copy(def.view.target); camGoal = def.view.theta; camPhi = def.view.phi; camDist = viewDist(def.view);
+  } else if (!def && motion && !motion.leaving) {
+    // exercise unselected: stand up again and go back to the normal view
+    motion.leaving = true;
+    TARGET.copy(TARGET_REST); camPhi = LEVEL_PHI; camDist = REST_DIST;
+    if (camGoal === null) camGoal = VIEW_ANGLE.front;
+  }
+  if (!motion) return;
+  motion.t += dt;
+  motion.blend = Math.min(1, Math.max(0, motion.blend + (motion.leaving ? -dt : dt) / 0.9));
+  if (motion.leaving && motion.blend === 0) {
+    applyPose(0);
+    gear.visible = false; floor.scale.setScalar(1);
+    motion = null;
+    return;
+  }
+  // slow, even rep: starts at the top, down in the first half, up in the second
+  motion.def.pose(0.5 - 0.5 * Math.cos(2 * Math.PI * motion.t / motion.def.period));
+  const b = motion.shown = sstep(0, 1, motion.blend);
+  applyPose(b);
+  gear.visible = b > 0.92;
+  floor.scale.setScalar(1 + 1.6 * b);   // bigger floor disc under the bench
 }
 
 // ======================= state + colouring =======================
@@ -769,6 +1177,7 @@ function refresh() {
   }
   const tendonGhost = (sel && state.xray) || state.layer > 0;
   setGhost(tendonMat, tendonGhost, 0.07);
+  if (rig) setGhost(rig.tendonMat, tendonGhost, 0.07);   // copy used by the skinned (moving) tendons
   tendons.forEach(t => { t.userData.ghost = tendonGhost; });
 
   document.getElementById('legend').style.display = ex ? 'block' : 'none';
@@ -885,7 +1294,8 @@ function selectExercise(ex) {
   state.exercise = state.exercise === ex ? null : ex;
   state.muscle = null;
   // turn the model to the side where the primary muscles mostly are (front z > 0, back z < 0)
-  if (state.exercise) {
+  // (exercises with a motion set their own camera view, see updateMotion)
+  if (state.exercise && !motionOf(state.exercise)) {
     const c = new THREE.Vector3();
     const zs = ex.p.flatMap(id => (meshesById[id] || []).map(m => m.localToWorld(c.copy(m.geometry.boundingSphere.center)).z));
     if (zs.length) setView(zs.reduce((a, b) => a + b, 0) >= 0 ? 'front' : 'back');
@@ -982,7 +1392,12 @@ const VIEWS = { front: [0, 10, 36], back: [0, 10, -36], left: [36, 10, 0], right
 const VIEW_ANGLE = { front: 0, back: Math.PI, left: Math.PI / 2, right: -Math.PI / 2 };
 let camGoal = null;   // target azimuth; camera orbits around the body instead of flying through it
 function setView(name) {
-  if (name in VIEW_ANGLE) camGoal = VIEW_ANGLE[name];
+  // while an exercise is acted out, "front" goes back to that exercise's view
+  if (motion && !motion.leaving && name === 'front') {
+    camGoal = motion.def.view.theta; camPhi = motion.def.view.phi; camDist = viewDist(motion.def.view); TARGET.copy(motion.def.view.target);
+    return;
+  }
+  if (name in VIEW_ANGLE) { camGoal = VIEW_ANGLE[name]; camPhi = LEVEL_PHI; }
 }
 document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
 const spinBtn = document.getElementById('spin');
@@ -993,7 +1408,7 @@ spinBtn.addEventListener('click', () => {
 document.querySelectorAll('[data-layer]').forEach(b => b.addEventListener('click', () => { state.layer = +b.dataset.layer; refresh(); }));
 document.getElementById('xray').addEventListener('click', () => { state.xray = !state.xray; refresh(); });
 document.getElementById('unhide').addEventListener('click', () => { state.hidden.clear(); refresh(); });
-controls.addEventListener('start', () => { camGoal = null; });
+controls.addEventListener('start', () => { camGoal = null; camDist = null; });
 
 // optional url hash: index.html#back (start view) or index.html#ex=Deadlift (preselect an exercise)
 const hash = decodeURIComponent(location.hash.slice(1));
@@ -1573,16 +1988,20 @@ const clock = new THREE.Clock();
 function loop() {
   requestAnimationFrame(loop);
   // time-based easing factor so camera moves take ~1s regardless of frame rate
-  const k = 1 - Math.exp(-clock.getDelta() * 6);
+  const dt = Math.min(clock.getDelta(), 0.1);
+  const k = 1 - Math.exp(-dt * 6);
+  if (loaded) updateMotion(dt);
   if (camGoal !== null) {
-    // ease the camera along the orbit towards the requested side, levelling it out
+    // ease the camera along the orbit towards the requested side and height (level, unless an exercise view says otherwise)
     controls.target.lerp(TARGET, k);
     const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
     const diff = Math.atan2(Math.sin(camGoal - sph.theta), Math.cos(camGoal - sph.theta));
     sph.theta += diff * k;
-    sph.phi += (Math.PI / 2 - 0.03 - sph.phi) * k;
+    sph.phi += (camPhi - sph.phi) * k;
+    if (camDist !== null) sph.radius += (camDist - sph.radius) * k;
     camera.position.setFromSpherical(sph).add(controls.target);
-    if (Math.abs(diff) < 0.002) camGoal = null;
+    if (Math.abs(diff) < 0.002 && Math.abs(camPhi - sph.phi) < 0.002 && controls.target.distanceTo(TARGET) < 0.01 &&
+      (camDist === null || Math.abs(camDist - sph.radius) < 0.01)) { camGoal = null; camDist = null; }
   }
   controls.update();
   renderer.render(scene, camera);

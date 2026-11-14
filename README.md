@@ -14,6 +14,7 @@ Built as a single static page: Three.js for the 3D view, plain JavaScript, no bu
 - Hover over a muscle to see its name, what it does and the best exercises for it
 - Click a muscle to list every exercise that trains it (primary first, then secondary)
 - Click an exercise to highlight its primary muscles (red) and secondary muscles (orange)
+- Exercises with a motion (so far: barbell bench press) are acted out by the 3D body when selected: it lies on a bench and presses the bar slowly in a loop, with the trained muscles highlighted. The model has no skeleton, so a simple one is built from the bones on first use (joint centres from the humerus, radius, femur etc., skin weights from vertex positions). Motions are defined in `MOTIONS` in `index.html`.
 - The ▶ button opens a YouTube search for short form videos of that exercise
 - Each exercise in the list shows a drawing of the position. Hover the exercise to alternate between the start and end frames; selecting it shows both side by side. Exercises without a drawing show a small front + back body with the trained muscles highlighted instead.
 - Outlines mark where one muscle ends and the next begins: strong lines between muscle groups, faint lines between parts of the same muscle
