@@ -486,7 +486,8 @@ loader.parse(base64ToBuffer(window.BODY_GLB), '', gltf => {
   for (const o of all) {
     const name = cleanName(o.userData.zname), kind = o.userData.kind;
     o.geometry.computeBoundingSphere();
-    const cy = o.localToWorld(v.copy(o.geometry.boundingSphere.center)).y;
+    const c = o.localToWorld(v.copy(o.geometry.boundingSphere.center)), cy = c.y;
+    o.userData.side = c.x > 0.15 ? 0 : c.x < -0.15 ? 1 : -1;   // 0 left, 1 right, -1 on the midline
     const gym = kind === 'muscle' ? gymIdFor(name) : null;
 
     if ((cy > chinY && !gym) || HIDDEN.test(name)) {
@@ -774,7 +775,7 @@ const MOTIONS = {
   },
   'Push-up': { pose: pushupPose, gear: matGear, period: 4.5, view: { theta: 0.45, phi: 1.22, dist: 30, target: V3(0.5, 3, 0) } },
   'Bulgarian split squat': {
-    pose: splitSquatPose, gear: splitSquatGear, period: 5,
+    pose: splitSquatPose, gear: splitSquatGear, period: 5, side: 0,   // left leg forward works
     view: { theta: 1.05, phi: 1.32, dist: 33, target: V3(0, 7.5, -1.2) },
   },
   'Lat pulldown': { pose: pulldownPose, gear: pulldownGear, period: 5, view: { theta: 0.75, phi: 1.3, dist: 35, target: V3(0, 10.5, 1) } },
@@ -782,7 +783,7 @@ const MOTIONS = {
   'Face pull': { pose: facePullPose, gear: facePullGear, period: 4.5, view: { theta: 0.9, phi: 1.3, dist: 33, target: V3(0, 11, 2.5) } },
   'Lateral raise': { pose: lateralRaisePose, gear: dumbbellGear, period: 4.5, view: { theta: 0.35, phi: 1.45, dist: 32, target: V3(0, 10.5, 0) } },
   'Cable external rotation': {
-    pose: externalRotationPose, gear: externalRotationGear, period: 4,
+    pose: externalRotationPose, gear: externalRotationGear, period: 4, side: 1,   // right arm
     view: { theta: 0.35, phi: 1.05, dist: 28, target: V3(0, 11, 1) },
   },
   // alternating sides: one period = left side + right side
@@ -793,7 +794,7 @@ const MOTIONS = {
     pose: doorwayPose, gear: doorwayGear, period: 6,
     view: { theta: 0.75, phi: 1.25, dist: 36, target: V3(0, 11, 0.5) },
   },
-  'Couch stretch': { pose: couchPose, gear: couchGear, period: 6, view: { theta: 1.25, phi: 1.3, dist: 30, target: V3(0, 6, 0.5) } },
+  'Couch stretch': { pose: couchPose, gear: couchGear, period: 6, side: 1, /* right (rear) leg stretched */ view: { theta: 1.25, phi: 1.3, dist: 30, target: V3(0, 6, 0.5) } },
 };
 for (const [name, def] of Object.entries(MOTIONS)) def.name = name;
 const motionOf = ex => (ex && MOTIONS[ex.name]) || null;
@@ -1154,13 +1155,14 @@ const INCLINE = 0.6, SEAT = V3(2.5, 4.6, 0);   // incline angle; where seat and 
 function inclinePose(u) {
   const q = headUp(ON_BACK, INCLINE), root = rootAt(q, V3(0, 8.6, rig.zBack), SEAT.clone().add(V3(0, 0.45, 0)));
   const L = rig.sides[0], gripX = 2.75;
-  const yTop = L.S.y - 0.1, dx = gripX - L.S.x, reach = 0.97 * rig.reach + 0.9 * L.G0.distanceTo(L.W);
-  const zTop = L.S.z + Math.sqrt(Math.max(1, reach * reach - dx * dx - (yTop - L.S.y) ** 2));
-  const yBot = L.S.y - 0.55, zBot = rig.chestZAt(yBot) + 0.16, v = 1 - u;
-  const y = yBot + (yTop - yBot) * v * v, z = zBot + (zTop - zBot) * v;
+  // weights move with gravity: the bar goes straight up from the upper chest, not along the slope of the bench
+  const yBot = L.S.y - 0.55, bot = toW(root, V3(0, yBot, rig.chestZAt(yBot) + 0.16));
+  const Sw = toW(root, V3(0, L.S.y, L.S.z)), R = 0.97 * rig.reach + 0.9 * L.G0.distanceTo(L.W);
+  const dx = bot.x - Sw.x, dz = gripX - L.S.x;
+  const yTop = Sw.y + Math.sqrt(Math.max(1, R * R - dx * dx - dz * dz)), y = lerp(yTop, bot.y, u);
   return {
     root,
-    arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * gripX, y, z)), dirW(root, V3(s.sg * 0.8, -0.3, -0.6)), dirW(root, V3(0, -1, 0)))),
+    arms: rig.sides.map(s => armTo(V3(bot.x, y, -s.sg * gripX), dirW(root, V3(s.sg * 0.8, -0.3, -0.6)), dirW(root, V3(0, -1, 0)))),
     legs: rig.sides.map(s => { const h = toW(root, s.H); return footFlat(V3(h.x + 4.4, s.A.y, h.z * 1.9), V3(0.3, 1, 0), V3(1, 0, 0)); }),
   };
 }
@@ -1205,20 +1207,20 @@ function pulldownPose(u) {
   const hips = rig.sides[0].H.clone().add(rig.sides[1].H).multiplyScalar(0.5);
   const root = rootAt(q, hips, V3(0, 5.6, 0)), L = rig.sides[0];
   const bot = toW(root, V3(0, L.S.y - 0.2, rig.chestZAt(L.S.y - 0.4) + 0.6));
-  const bar = vlerp(V3(0, 17.2, 0.7), bot, u);
+  const bar = V3(0, lerp(17.2, bot.y, u), bot.z);   // the cable pulls straight down
   return {
     root,
-    arms: rig.sides.map(s => armTo(V3(s.sg * 3.4, bar.y, bar.z), V3(s.sg, -0.6, -0.2), V3(0, 0, 1))),
+    // elbows drive down under the hands, so the forearms point up at the bar at the bottom
+    arms: rig.sides.map(s => armTo(V3(s.sg * 3.2, bar.y, bar.z), V3(s.sg * 0.7, -1, 0.1), V3(0, 0, 1))),
     legs: rig.sides.map(s => footFlat(V3(s.sg * 1.1, s.A.y, 4.6), V3(0, 1, 0.3))),
   };
 }
 
 // seated cable row: low seat, feet on the plate, v-handle from arms' length to the belly
+// seated row: the body leans forwards at the start and sits up at the end; the handle moves level at belly height
+const rowRoot = u => rootAt(qAxis(AXIS_X, lerp(0.25, -0.08, u)), rig.sides[0].H.clone().add(rig.sides[1].H).multiplyScalar(0.5), V3(0, 3.6, 0));
 function rowPose(u) {
-  const q = qAxis(AXIS_X, lerp(0.25, -0.08, u));
-  const hips = rig.sides[0].H.clone().add(rig.sides[1].H).multiplyScalar(0.5);
-  const root = rootAt(q, hips, V3(0, 3.6, 0));
-  const near = toW(root, V3(0, 11, 1.9)), far = V3(0, 6.6, 7.0), h = vlerp(far, near, u);
+  const root = rowRoot(u), near = toW(rowRoot(1), V3(0, 11, 1.9)), h = V3(0, near.y, lerp(7.0, near.z, u));
   return {
     root,
     arms: rig.sides.map(s => armTo(V3(s.sg * 0.3, h.y, h.z), V3(s.sg * 0.4, -1, -0.5), V3(-s.sg, 0, 0))),
@@ -1228,11 +1230,16 @@ function rowPose(u) {
 
 // face pull: standing, rope from a high pulley pulled to the face, elbows high and wide
 function facePullPose(u) {
-  const root = { q: qAxis(AXIS_X, -0.04), p: V3() };
+  const root = { q: qAxis(AXIS_X, -0.05), p: V3() };
   return {
     root,
-    arms: rig.sides.map(s => armTo(vlerp(V3(s.sg * 0.45, 14.8, 5.6), V3(s.sg * 2.3, 16, 0.9), u), V3(s.sg, 0.35, -0.3),
-      vlerp(V3(-s.sg, 0, 0), V3(-s.sg * 0.5, 0, 1), u).normalize())),
+    arms: rig.sides.map(s => {
+      // start: arms reaching forwards and a little up to the rope; end: hands beside the ears, elbows out at shoulder height
+      const to = vlerp(V3(s.sg * 0.5, 15.9, 5.9), V3(s.sg * 1.9, 16.5, 0.4), u);
+      const pole = vlerp(V3(s.sg * 0.6, -1, 0), V3(s.sg, -0.15, -0.7), u).normalize();
+      const palm = vlerp(V3(-s.sg, -0.2, 0), V3(-s.sg * 0.6, 0, 0.8), u).normalize();   // neutral grip turning out (thumbs back)
+      return armTo(to, pole, palm);
+    }),
     legs: [STAND, STAND],
   };
 }
@@ -1305,14 +1312,14 @@ function birdDogPose(u, ph) {
 function sidePlankPose(u) {
   const [l, r] = rig.sides, pivot = V3(0, 0.4, -0.2);
   const rootFor = t => rootAt(headUp(ON_SIDE, t), pivot, V3(7.5, 0.45, 0));
-  const root = rootFor(solve1(t => toW(rootFor(t), r.S).y, r.L1 * 0.98 + 0.4, 0, 0.8));
-  const Sr = toW(root, r.S), Sl = toW(root, l.S);
-  const hip = toW(root, V3(1.7, 9.6, 0.4)), up = Sl.clone().add(V3(0, 0.97 * rig.reach + 0.5, 0));
+  const t0 = solve1(t => toW(rootFor(t), r.S).y, r.L1 * 0.98 + 0.4, 0, 0.8);
+  const hold = rootFor(t0), root = rootFor(t0 - 0.05 * u);   // a held position: slow hip dip and lift
+  const Sr = toW(hold, r.S);
   return {
     root,
     arms: [
-      armTo(vlerp(hip, up, u), V3(0, 0, -1), vlerp(dirW(root, V3(-1, 0, 0)), V3(0, 0, 1), u).normalize(),
-        { point: 'palm', curl: lerp(0, 1, u) > 0.5 ? RELAX : FLAT }),
+      armTo(toW(root, V3(1.7, 9.6, 0.4)), dirW(root, V3(0, 0, -1)), dirW(root, V3(-1, 0, 0)),
+        { point: 'palm', fingers: dirW(root, V3(0, -1, 0.3)), curl: FLAT }),   // top hand rests on the hip
       armTo(V3(Sr.x, 0.4, Sr.z + r.L2 * 0.98), V3(0, -1, 0), V3(0, -1, 0), { point: 'wrist', fingers: V3(0, 0, 1), curl: RELAX }),
     ],
     legs: rig.sides.map(() => ({ fk: { abd: -0.09 } })),   // legs together, feet stacked
@@ -1452,29 +1459,29 @@ function pulldownGear(g) {
   box(g, 0.6, 4.0, 0.6, GEAR_MAT.frame, 0, 2.0, 0.4);
   const roller = cylZ(g, 0.45, 4.6, GEAR_MAT.pad);           // knee roller (across)
   roller.rotation.y = Math.PI / 2; roller.position.set(0, 7.0, 3.9);
-  box(g, 1.2, 21, 1.2, GEAR_MAT.frame, 0, 10.5, -2.6);      // column behind
-  box(g, 1.0, 0.8, 4.0, GEAR_MAT.frame, 0, 20.6, -0.8);     // top arm with the pulley
+  box(g, 1.2, 21, 1.2, GEAR_MAT.frame, 0, 10.5, 7.2);       // column in front of the user (weight stack side)
+  box(g, 1.0, 0.8, 6.0, GEAR_MAT.frame, 0, 20.6, 4.4);      // top arm reaching over the user, pulley at its end
   const bar = new THREE.Group(); g.add(bar);
   cylZ(bar, 0.14, 10, GEAR_MAT.steel, 0, 12);
   const cable = rod(g, 0.06, GEAR_MAT.cable);
-  return h => { barBetween(bar, h); cable.span(V3(0, 20.3, 0.7), bar.position); };
+  return h => { barBetween(bar, h); cable.span(V3(bar.position.x, 20.2, bar.position.z), bar.position); };
 }
 function rowGear(g) {
   box(g, 3.0, 2.4, 4.0, GEAR_MAT.pad, 0, 1.2, -0.4);        // low seat
   box(g, 3.4, 4.2, 0.4, GEAR_MAT.frame, 0, 2.1, 8.3);       // foot plate
-  box(g, 1.2, 7, 1.2, GEAR_MAT.frame, 0, 3.5, 9.6);         // tower
+  box(g, 1.2, 8, 1.2, GEAR_MAT.frame, 0, 4, 9.6);           // tower
   const handle = new THREE.Group(); g.add(handle);
   cylZ(handle, 0.13, 0.9, GEAR_MAT.steel, 0, 10);
   const cable = rod(g, 0.06, GEAR_MAT.cable);
-  return h => { barBetween(handle, h); cable.span(V3(0, 3.0, 9.0), handle.position); };
+  return h => { barBetween(handle, h); cable.span(V3(0, handle.position.y, 9.0), handle.position); };   // level cable
 }
 function facePullGear(g) {
-  cableTower(g, 0, 9, 15.5);
+  cableTower(g, 0, 9, 16.3);
   const ropes = [rod(g, 0.12, GEAR_MAT.cable), rod(g, 0.12, GEAR_MAT.cable)], cable = rod(g, 0.06, GEAR_MAT.cable);
   return h => {
     const knot = h.grip[0].clone().add(h.grip[1]).multiplyScalar(0.5).add(V3(0, 0, 0.8));
     ropes.forEach((r, j) => r.span(knot, h.grip[j]));
-    cable.span(V3(0, 15.5, 8.4), knot);
+    cable.span(V3(0, 16.3, 8.4), knot);
   };
 }
 function externalRotationGear(g) {
@@ -1612,7 +1619,9 @@ function refresh() {
   const mob = heat ? weeklyMobility() : null;
   for (const m of muscles) {
     const id = m.userData.id;
-    const role = sel ? roleOf(id) : null;
+    // one-sided exercises (split squat, one-arm cable work...): only the working side's muscles count
+    const side = motionOf(ex) ? motionOf(ex).side : undefined;
+    const role = sel && !(side !== undefined && m.userData.side === 1 - side) ? roleOf(id) : null;
     // x-ray: only primary muscles stay solid, so deep primaries show through secondary ones
     const ghost = peeled.has(m) || (sel && state.xray && role !== 'p');
     let col = id.startsWith('z:') ? COLORS.other : COLORS.normal;
