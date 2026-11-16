@@ -215,6 +215,8 @@
   .ex .pose img, .pose-big img { filter: invert(0.9); }
   .ex .pose img { position: absolute; inset: 4px; width: calc(100% - 8px); height: calc(100% - 8px); object-fit: contain; }
   .ex .pose .end { opacity: 0; }
+  /* 3d frames of animated exercises: already dark, fill the box */
+  .ex .pose.anim img { filter: none; inset: 0; width: 100%; height: 100%; }
   .ex:hover .pose .end { animation: pose-flip 1.4s infinite; }
   .ex:hover .pose img:first-child { animation: pose-flip 1.4s infinite reverse; }
   @keyframes pose-flip { 0%, 45% { opacity: 0; } 55%, 100% { opacity: 1; } }
@@ -728,9 +730,63 @@ function renderThumb(ex) {
   return thumbCanvas.toDataURL('image/png');
 }
 
+// one frame of an exercise's animation (u = 0 start, 1 end), with its equipment, seen from the exercise's own view.
+// the pose is put on the body only for this render; what is on screen is restored afterwards.
+const motionCam = new THREE.PerspectiveCamera(32, THUMB_W / THUMB_H, 0.1, 200);
+function renderMotionThumb(ex, u) {
+  const def = motionOf(ex);
+  if (!rig) { rig = buildRig(); refresh(); }   // the skeleton is built on first use (also by the animation)
+  const mob = !!ex.mobility;
+  // one-sided exercises: only the working side is highlighted, as on the big body
+  const matFor = m => {
+    const id = m.userData.id;
+    if (id) {
+      if (def.side !== undefined && m.userData.side === 1 - def.side) return THUMB_MATS.n;
+      return ex.p.includes(id) ? THUMB_MATS[mob ? 'mp' : 'p'] : ex.s.includes(id) ? THUMB_MATS[mob ? 'ms' : 's'] : THUMB_MATS.n;
+    }
+    return tendons.includes(m) ? THUMB_MATS.tendon : m.material;   // bones / head keep their look
+  };
+  // remember what is on screen: shown pose, target pose, equipment and floor
+  const keep = snapshot(), keepR = rig.R.map(q => q.clone()), keepRoot = { q: rig.root.q.clone(), p: rig.root.p.clone() };
+  const keepGear = gear.visible, keepVis = [...GEARS.values()].map(g => g.group.visible), keepFloor = floor.scale.x;
+  // pose the body (ph: alternating exercises show their first side) and the equipment
+  solvePose(def.pose(u, u * 0.5));
+  blendShown(keep, 1, false);
+  const hands = applyShown(), g = gearOf(def);
+  if (g.update) g.update(hands);
+  for (const [name, x] of GEARS) x.group.visible = name === def.name;
+  gear.visible = true; floor.scale.setScalar(2.6);
+  // camera: the exercise's own view angle and distance
+  const v = def.view;
+  motionCam.position.setFromSphericalCoords(v.dist * 1.0, v.phi, v.theta).add(v.target);
+  motionCam.lookAt(v.target);
+  const w = thumbTarget.width, h = thumbTarget.height;
+  try {
+    withPass(matFor, () => {
+      gear.visible = true;   // passes hide the equipment; this picture shows it
+      renderer.setRenderTarget(thumbTarget);
+      renderer.clear();
+      renderer.render(scene, motionCam);
+      renderer.readRenderTargetPixels(thumbTarget, 0, 0, w, h, thumbPixels);
+    });
+  } finally {
+    rig.R.forEach((q, i) => q.copy(keepR[i])); rig.root.q.copy(keepRoot.q); rig.root.p.copy(keepRoot.p);
+    const sh = rig.shown;
+    sh.R.forEach((q, i) => q.copy(keep.R[i])); sh.q.copy(keep.q); sh.p.copy(keep.p);
+    applyShown();
+    gear.visible = keepGear; [...GEARS.values()].forEach((x, i) => { x.group.visible = keepVis[i] ?? false; });
+    floor.scale.setScalar(keepFloor);
+    renderer.setRenderTarget(null);
+  }
+  const img = thumbCtx.createImageData(w, h);
+  for (let y = 0; y < h; y++) img.data.set(thumbPixels.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
+  thumbCtx.putImageData(img, 0, 0);
+  return thumbCanvas.toDataURL('image/png');
+}
+
 // queue every visible thumbnail that has no image yet
 function requestThumbs() {
-  document.querySelectorAll('img.thumb[data-thumb]').forEach(img => {
+  document.querySelectorAll('img[data-thumb]').forEach(img => {
     const name = img.dataset.thumb;
     if (thumbCache.has(name)) img.src = thumbCache.get(name);
     else if (!thumbQueue.includes(name)) thumbQueue.push(name);
@@ -739,10 +795,11 @@ function requestThumbs() {
 // render a couple of queued thumbnails per frame so the page stays responsive
 function processThumbs() {
   for (let n = 0; n < 2 && thumbQueue.length; n++) {
-    const name = thumbQueue.shift(), ex = exByName[name];
+    // key: exercise name (standing body) or "<name>|0" / "<name>|1" (start / end frame of its animation)
+    const name = thumbQueue.shift(), [exName, u] = name.split('|'), ex = exByName[exName];
     if (!ex || thumbCache.has(name)) continue;
-    thumbCache.set(name, renderThumb(ex));
-    document.querySelectorAll(`img.thumb[data-thumb="${CSS.escape(name)}"]`).forEach(img => { img.src = thumbCache.get(name); });
+    thumbCache.set(name, u === undefined ? renderThumb(ex) : renderMotionThumb(ex, +u));
+    document.querySelectorAll(`img[data-thumb="${CSS.escape(name)}"]`).forEach(img => { img.src = thumbCache.get(name); });
   }
 }
 
@@ -1228,17 +1285,18 @@ function rowPose(u) {
   };
 }
 
-// face pull: standing, rope from a high pulley pulled to the face, elbows high and wide
+// face pull: standing, rope from a high pulley pulled straight back to the shoulders. the grip stays the same
+// the whole rep (neutral, palms facing each other, no turning of the hands) and the elbows keep pointing out and down
 function facePullPose(u) {
   const root = { q: qAxis(AXIS_X, -0.05), p: V3() };
   return {
     root,
     arms: rig.sides.map(s => {
-      // start: arms reaching forwards and a little up to the rope; end: hands beside the ears, elbows out at shoulder height
-      const to = vlerp(V3(s.sg * 0.5, 15.9, 5.9), V3(s.sg * 1.9, 16.5, 0.4), u);
-      const pole = vlerp(V3(s.sg * 0.6, -1, 0), V3(s.sg, -0.15, -0.7), u).normalize();
-      const palm = vlerp(V3(-s.sg, -0.2, 0), V3(-s.sg * 0.6, 0, 0.8), u).normalize();   // neutral grip turning out (thumbs back)
-      return armTo(to, pole, palm);
+      const S = toW(root, s.S);
+      // start: arms reaching forwards and slightly up to the rope; end: hands just in front of the shoulders
+      const from = S.clone().add(V3(-s.sg * 0.9, 0.6, rig.gripReach * 0.9));
+      const to = S.clone().add(V3(-s.sg * 0.15, 0.15, 1.7));
+      return armTo(vlerp(from, to, u), V3(s.sg, -0.2, -0.35).normalize(), V3(-s.sg, 0, 0));
     }),
     legs: [STAND, STAND],
   };
@@ -1786,7 +1844,13 @@ function exItem(ex, badge) {
   return `<div class="ex ${state.exercise === ex ? 'on' : ''}" data-ex="${EXERCISES.indexOf(ex)}" draggable="true">
     <button class="add" data-add="${EXERCISES.indexOf(ex)}" title="Add to selected workout">+</button>
     <a class="play" href="${videoUrl(ex)}" target="_blank" rel="noopener" title="Watch form video">▶</a>
-    ${ex.pose
+    ${motionOf(ex)
+      // animated on the 3d body: start + end frame of that animation (end fades in on hover, like the drawings)
+      ? `<span class="thumb pose anim">${[0, 1].map(u => {
+          const key = `${ex.name}|${u}`;
+          return `<img ${u ? 'class="end"' : ''} data-thumb="${esc(key)}" alt="" ${thumbCache.has(key) ? `src="${thumbCache.get(key)}"` : ''}>`;
+        }).join('')}</span>`
+      : ex.pose
       // position drawing (start frame; the end frame fades in on hover so it looks animated)
       ? `<span class="thumb pose"><img src="img/poses/${ex.pose}-relaxation.svg" alt="" loading="lazy"><img class="end" src="img/poses/${ex.pose}-tension.svg" alt="" loading="lazy"></span>`
       // no drawing available: small body with the trained muscles highlighted
@@ -1803,7 +1867,7 @@ function renderPanel() {
     const ex = state.exercise;
     focusEl.innerHTML = `<button class="close" title="Clear">×</button>
       <h2>${ex.name}</h2><div class="sub">${ex.eq}</div>
-      ${ex.pose ? `<div class="pose-big"><img src="img/poses/${ex.pose}-relaxation.svg" alt="start position"><span>→</span><img src="img/poses/${ex.pose}-tension.svg" alt="end position"></div>` : ''}
+      ${ex.pose && !motionOf(ex) ? `<div class="pose-big"><img src="img/poses/${ex.pose}-relaxation.svg" alt="start position"><span>→</span><img src="img/poses/${ex.pose}-tension.svg" alt="end position"></div>` : ''}
       <p>${ex.tip}</p>
       ${ex.caution ? `<div class="caution-note">⚠ Back caution: ${esc(ex.caution)}</div>` : ''}
       <div class="row"><b>${ex.mobility ? 'Stretches' : 'Primary'}</b><div class="tags">${tagHtml(ex.p)}</div></div>
@@ -2015,6 +2079,7 @@ function renderSchedule(flashWo, flashEx) {
         <label class="switch" title="Show on body"><input type="checkbox" data-act="toggle" ${w.on ? 'checked' : ''}><span></span></label>
         <input class="name" data-act="name" value="${esc(w.name)}" title="Rename">
         <input class="num" type="number" min="1" max="7" data-act="freq" value="${w.freq}" title="Times per week"><span class="unit">×/wk</span>
+        <button class="icon" data-act="dup" title="Duplicate workout">⧉</button>
         <button class="icon" data-act="del" title="Delete workout">🗑</button>
       </div>
       ${w.items.map((it, i) => {
@@ -2095,6 +2160,11 @@ workoutsEl.addEventListener('click', ev => {
     if (w.items.length && !confirm(`Delete "${w.name}"?`)) return;
     schedule.workouts = schedule.workouts.filter(x => x !== w);
     if (schedule.target === w.id) schedule.target = schedule.workouts[0]?.id || null;
+  } else if (act === 'dup') {
+    // copy right after the original, same exercises / sets, and make it the target for the + buttons
+    const copy = { ...w, id: uid(), name: w.name + ' (copy)', items: w.items.map(it => ({ ...it })) };
+    schedule.workouts.splice(schedule.workouts.indexOf(w) + 1, 0, copy);
+    schedule.target = copy.id;
   } else if (act === 'rm') {
     w.items.splice(+ev.target.closest('[data-i]').dataset.i, 1);
   } else if (!act) {
