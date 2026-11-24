@@ -929,6 +929,16 @@ const MOTIONS = {
   'Hamstring stretch': { pose: hamstringStretchPose, gear: stepGear, period: 6, side: 0, view: { theta: 1.2, phi: 1.35, dist: 34, target: V3(0, 8, 1) } },
   'Pigeon stretch': { pose: pigeonPose, gear: matGear, period: 6, view: { theta: 0.8, phi: 1.25, dist: 32, target: V3(0, 3.5, 0) } },
   'Calf stretch': { pose: calfStretchPose, gear: calfWallGear, period: 6, side: 1, view: { theta: 1.2, phi: 1.4, dist: 34, target: V3(0, 8, 0.5) } },
+  // batch 8
+  '90/90 hip switches': { pose: hip9090Pose, gear: matGear, period: 6, view: { theta: 0.35, phi: 1.05, dist: 30, target: V3(0, 4, 1) } },
+  'Adductor rock-back': { pose: adductorRockPose, gear: matGear, period: 5, side: 0, view: { theta: 0.3, phi: 1.1, dist: 32, target: V3(1.5, 3, 2) } },
+  'Criss-cross sitting (easy pose)': { pose: crissCrossPose, gear: matGear, period: 8, view: { theta: 0.5, phi: 1.3, dist: 28, target: V3(0, 5, 0.5) } },
+  'Knees-to-chest stretch': { pose: kneesToChestPose, gear: matGear, period: 6, view: { theta: 0.45, phi: 1.2, dist: 30, target: V3(1, 2.5, 0) } },
+  'Figure-4 stretch (lying)': { pose: figure4Pose, gear: matGear, period: 6, side: 1, view: { theta: 0.45, phi: 1.15, dist: 30, target: V3(1, 3, 0) } },
+  'Lying hamstring stretch (strap)': { pose: strapHamstringPose, gear: strapGear, period: 6, side: 0, view: { theta: 0.45, phi: 1.2, dist: 32, target: V3(1, 3.5, 0) } },
+  'Thoracic extension (foam roller)': { pose: thoracicExtPose, gear: rollerGear, period: 5, view: { theta: 0.4, phi: 1.25, dist: 30, target: V3(-1, 3, 0) } },
+  'Cat-cow': { pose: catCowPose, gear: matGear, period: 6, view: { theta: 0.3, phi: 1.35, dist: 30, target: V3(1.5, 4, 0) } },
+  'Open book (thoracic rotation)': { pose: openBookPose, gear: matGear, period: 6, view: { theta: 0.0, phi: 0.9, dist: 30, target: V3(-1, 3, 1.5) } },
   'Couch stretch': { pose: couchPose, gear: couchGear, period: 6, side: 1, /* right (rear) leg stretched */ view: { theta: 1.25, phi: 1.3, dist: 30, target: V3(0, 6, 0.5) } },
 };
 for (const [name, def] of Object.entries(MOTIONS)) def.name = name;
@@ -2417,6 +2427,145 @@ function calfStretchPose(u) {
   };
 }
 
+// ---------- batch 8: floor mobility ----------
+// lying on the back (head towards -x), pelvis flat on the floor
+const backRoot = () => rootAt(ON_BACK, V3(0, 9.3, rig.zBack), V3(0, 0.2, 0));
+// knee and a point down the shin of a leg posed by hip / knee flexion while lying (world)
+function lyingLegPts(root, s, f, k, along = 1.2) {
+  const K = toW(root, s.H.clone().addScaledVector(V3(0, -Math.cos(f), Math.sin(f)), s.lt));
+  return { K, shin: K.clone().add(dirW(root, V3(0, -Math.cos(f - k), Math.sin(f - k))).multiplyScalar(along)) };
+}
+
+// 90/90 hip switches: sitting tall, both knees bent 90°; the knees swing over from one side to the other
+function hip9090Pose(u) {
+  const h = midHips(), root = rootAt(new THREE.Quaternion(), h, V3(0, 1.5, 0.3)), t = u;   // t: 0 knees to the left, 1 to the right
+  const up = Math.sin(Math.PI * t);
+  // one side's 90/90: front leg thigh forwards-out with the shin across, back leg thigh out to the side with the shin behind
+  const cfg = side => rig.sides.map(s => {
+    const front = s.sg === side, H = toW(root, s.H);
+    return front
+      ? { to: V3(-side * 0.3, 0.6, H.z + 3.3), pole: V3(side, 0.2, 0.5) }
+      : { to: V3(-side * 3.9, 0.6, H.z - 2.8), pole: V3(-side, 0.2, 0.3) };
+  });
+  const A = cfg(1), B = cfg(-1);
+  return {
+    root, spine: { twist: lerp(0.25, -0.25, t) },
+    arms: rig.sides.map(s => armTo(V3(s.sg * 2.2, 0.15, -2.6), V3(0, 0, -1), V3(0, -1, 0), { point: 'palm', fingers: V3(0, 0, -1), curl: FLAT })),
+    legs: rig.sides.map((s, j) => {
+      const to = vlerp(A[j].to, B[j].to, t).add(V3(0, 1.8 * up, 0)), pole = vlerp(A[j].pole, B[j].pole, t).add(V3(0, 1.5 * up, 0)).normalize();
+      return { to, pole, toe: V3(0, 0, 1), down: V3(0, -1, 0) };
+    }),
+  };
+}
+
+// adductor rock-back: on hands and the right knee, left leg straight out to the side; the hips rock back to the heel
+function adductorRockPose(u) {
+  const hips = midHips(), L = rig.sides[0];
+  const hipAt = v => V3(lerp(2.5, 4.6, v), lerp(L.lt + 0.35, 3.4, v), 0);
+  const rootFor = (v, t) => rootAt(headUp(ON_FRONT, t), hips, hipAt(v));
+  const t0 = solve1(t => toW(rootFor(0, t), L.S).y, 0.97 * rig.reach + 0.45, -0.5, 0.6), hold = rootFor(0, t0);
+  const root = rootFor(u, t0 + lerp(0, 0.25, u));
+  return {
+    root, scap: both({ prot: 0.05 }),
+    arms: rig.sides.map(s => { const S = toW(hold, s.S); return armTo(V3(S.x, 0.1, S.z + s.sg * 0.15), V3(1, 0, 0), V3(0, -1, 0), { point: 'palm', fingers: V3(-1, 0, 0), curl: FLAT }); }),
+    legs: rig.sides.map(s => {
+      const H = toW(root, s.H);
+      if (s.sg > 0) return { to: V3(H.x + 0.4, 0.75, 7.6), pole: V3(0, 1, 0), toe: V3(-1, 0, 0.2).normalize(), down: V3(0, -0.3, 1).normalize() };   // left leg out to the side
+      const K = V3(hipAt(0).x + 0.1, 0.45, -1.0);
+      return { to: K.clone().add(V3(s.ls * 0.97, 0.15, 0)), pole: V3(-0.3, -1, 0), toe: V3(1, -0.15, 0).normalize(), down: V3(0, 1, 0) };
+    }),
+  };
+}
+
+// criss-cross sitting: seated on the floor, shins crossed, hands on the knees; slow breathing sway
+function crissCrossPose(u) {
+  const h = midHips(), root = rootAt(new THREE.Quaternion(), h, V3(0, 1.5, 0));
+  return {
+    root, spine: { side: 0.04 * (u - 0.5), flex: 0.05 },
+    arms: rig.sides.map(s => armTo(V3(s.sg * 2.9, 2.2, 2.7), V3(s.sg, -0.3, -0.3).normalize(), V3(0, -1, 0), { point: 'palm', fingers: V3(0, -0.2, 1).normalize(), curl: RELAX })),
+    legs: [{ to: V3(-0.9, 0.6, 2.4), pole: V3(1, 0.4, 0.5).normalize(), toe: V3(-1, -0.2, 0.3).normalize(), down: V3(0, -1, 0) },
+      { to: V3(0.9, 0.9, 1.7), pole: V3(-1, 0.4, 0.5).normalize(), toe: V3(1, -0.2, 0.3).normalize(), down: V3(0, -1, 0) }],
+  };
+}
+
+// knees-to-chest: on the back, hands on the shins pull both knees in; the lower back rounds slightly
+function kneesToChestPose(u) {
+  const root = backRoot(), f = lerp(1.6, 2.3, u), k = 2.1;
+  return {
+    root, spine: { flex: lerp(0, 0.12, u) }, head: { flex: 0.1 },
+    arms: rig.sides.map(s => armTo(lyingLegPts(root, s, f, k, 1.0).shin.add(dirW(root, V3(s.sg * 0.5, 0, 0))), dirW(root, V3(s.sg, 0, -0.3)),
+      dirW(root, V3(-s.sg, 0, 0)), { curl: RELAX })),
+    legs: rig.sides.map(() => ({ fk: { flex: f, knee: k, ankle: 0.3 } })),
+  };
+}
+
+// figure-4 stretch (lying): right ankle crossed over the left knee; hands behind the left thigh pull it in
+function figure4Pose(u) {
+  const root = backRoot(), f = lerp(1.15, 1.85, u), [l, r] = rig.sides;
+  const { K } = lyingLegPts(root, l, f, 1.6);
+  const thigh = toW(root, l.H).lerp(K, 0.65);
+  return {
+    root, head: { flex: 0.1 },
+    arms: rig.sides.map(s => armTo(thigh.clone().add(dirW(root, V3(s.sg * 0.4, 0, -0.6))), dirW(root, V3(s.sg, 0, -0.3)), dirW(root, V3(0, 0, -1)), { curl: RELAX })),
+    legs: [{ fk: { flex: f, knee: 1.6, ankle: 0.2 } },
+      { to: K.clone().add(dirW(root, V3(-0.6, 0, 0.6))), pole: dirW(root, V3(-1, 0.3, 0.2)).normalize(), toe: dirW(root, V3(1, 0, 0.3)).normalize(), down: dirW(root, V3(0, -1, 0.4)).normalize() }],
+  };
+}
+
+// lying hamstring stretch (strap): on the back, a strap round the left foot pulls the straight leg up
+const STRAP = { foot: V3() };
+function strapHamstringPose(u) {
+  const root = backRoot(), f = lerp(0.85, 1.45, u), l = rig.sides[0];
+  STRAP.foot = toW(root, l.H.clone().addScaledVector(V3(0, -Math.cos(f), Math.sin(f)), l.lt + l.ls + 0.9));
+  return {
+    root, head: { flex: 0.08 },
+    arms: rig.sides.map(s => { const S = toW(root, s.S); return armTo(S.clone().lerp(STRAP.foot, 0.42), dirW(root, V3(s.sg, 0, -0.5)), dirW(root, V3(0, 0, -1)), {}); }),
+    legs: [{ fk: { flex: f, knee: 0.05, ankle: -0.15 } }, { fk: {} }],
+  };
+}
+
+// thoracic extension on a foam roller: roller across the upper back, hands behind the head; the upper back extends
+// back over the roller while the hips stay down
+const ROLLER = { r: 0.75, at: null };
+function thoracicExtPose(u) {
+  const rest = rootAt(headUp(ON_BACK, 0.12), V3(0, 9.3, rig.zBack), V3(0, 0.2, 0)), spine = { flex: lerp(0.05, -0.4, u) };
+  ROLLER.at = toW(rest, V3(0, 13.2, rig.zBack - ROLLER.r));
+  const cq = rest.q.clone().multiply(spineQ(spine, 1));
+  return {
+    root: rest, spine, head: { flex: lerp(0.15, -0.1, u) },
+    arms: rig.sides.map(s => armTo(chestW(rest, spine, V3(s.sg * 0.45, 16.2, rig.zBack + 0.4)), V3(s.sg, 0.2, 0.3).applyQuaternion(cq), V3(0, 0, 1).applyQuaternion(cq),
+      { point: 'palm', fingers: V3(-s.sg, 0.3, 0).applyQuaternion(cq), curl: RELAX })),
+    legs: rig.sides.map(s => { const H = toW(rest, s.H); return footFlat(V3(H.x + 5.0, s.A.y, H.z * 1.2), V3(0, 1, 0), V3(1, 0, 0)); }),
+  };
+}
+
+// cat-cow: on hands and knees; the back arches with the head up (cow), then rounds with the head down (cat)
+function catCowPose(u) {
+  const hips = midHips(), L = rig.sides[0], hipW = V3(2.5, L.lt + 0.35, 0);
+  const rootFor = t => rootAt(headUp(ON_FRONT, t), hips, hipW);
+  const t0 = solve1(t => toW(rootFor(t), L.S).y, 0.97 * rig.reach + 0.45, -0.5, 0.6), hold = rootFor(t0);
+  const root = rootFor(t0 + lerp(-0.08, 0.08, u));
+  return {
+    root, spine: { flex: lerp(-0.35, 0.45, u) }, head: { flex: lerp(-0.45, 0.5, u) }, scap: both({ prot: lerp(-0.1, 0.2, u) }),
+    arms: rig.sides.map(s => { const S = toW(hold, s.S); return armTo(V3(S.x, 0.1, S.z + s.sg * 0.15), V3(1, 0, 0), V3(0, -1, 0), { point: 'palm', fingers: V3(-1, 0, 0), curl: FLAT }); }),
+    legs: rig.sides.map(s => { const H = toW(root, s.H); return { to: V3(H.x + s.ls * 0.98, 0.45, H.z), pole: V3(0, -1, 0), toe: V3(1, 0, 0), down: V3(0, 1, 0) }; }),
+  };
+}
+
+// open book: lying on the right side, knees bent 90° and stacked, arms straight in front; the top arm opens over to
+// the floor behind while the upper back turns and the head follows
+function openBookPose(u) {
+  const root = rootAt(ON_SIDE, V3(-2.0, 10.5, 0), V3(0, 0.25, 0)), arm = lerp(0, 2.7, u), spine = { twist: 0.42 * arm };
+  const [l, r] = rig.sides;
+  const dir = dirW(root, V3(Math.sin(arm), 0, Math.cos(arm)));
+  return {
+    root, spine, head: { turn: 0.25 * arm },
+    arms: [armTo(chestW(root, spine, l.S).addScaledVector(dir, rig.reach * 0.95), dirW(root, V3(0, -1, 0)), dirW(root, V3(Math.cos(arm), 0, -Math.sin(arm))), { point: 'wrist', fingers: dir, curl: RELAX }),
+      armTo(toW(root, r.S).add(V3(0, 0, rig.reach * 0.95)).setY(0.35), V3(0, 0.3, 0).add(dirW(root, V3(0, -1, 0))).normalize(), V3(0, -1, 0), { point: 'wrist', fingers: V3(0, 0, 1), curl: RELAX })],
+    legs: rig.sides.map(() => ({ fk: { flex: 1.57, knee: 1.6, ankle: 0.2 } })),
+  };
+}
+
 // ---------- equipment ----------
 // each gear(group) builds the exercise's equipment once and may return update(hands) for the moving parts.
 // hands = { grip: [left, right] grip points, lat: [left, right] sideways axes through the fists } (world)
@@ -2800,6 +2949,18 @@ function bikeGear(g) {
 }
 function stepGear(g) { box(g, 3.4, STEP.y, 3.2, GEAR_MAT.pad, 1.0, STEP.y / 2, STEP.z + 0.4); }
 function calfWallGear(g) { box(g, 16, 22, 0.6, GEAR_MAT.fabric, 0, 11, CALF_WALL_Z + 0.3); }
+
+function strapGear(g) {
+  matGear(g);
+  const ends = [rod(g, 0.06, GEAR_MAT.fabric), rod(g, 0.06, GEAR_MAT.fabric)];
+  return h => ends.forEach((e, j) => e.span(h.grip[j], STRAP.foot));
+}
+function rollerGear(g) {
+  matGear(g);
+  const roll = cylZ(g, ROLLER.r, 6, GEAR_MAT.fabric, 0, 24);
+  return () => roll.position.copy(ROLLER.at).setY(ROLLER.r + 0.12).setZ(0);
+}
+function pillowGear(g) { matGear(g); box(g, 3, 1.6, 2.4, GEAR_MAT.fabric, -16.8, 0.9, 0.2); }
 
 // ---------- putting the pose on the body ----------
 const GEARS = new Map();   // exercise name -> { group, update }
