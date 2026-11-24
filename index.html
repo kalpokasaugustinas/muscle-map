@@ -907,6 +907,17 @@ const MOTIONS = {
   'Standing cable high row': { pose: highRowPose, gear: highRowGear, period: 4.5, view: { theta: 0.9, phi: 1.3, dist: 33, target: V3(0, 11, 2.5) } },
   'Back extension': { pose: backExtensionPose, gear: backExtensionGear, period: 5, view: { theta: 1.3, phi: 1.4, dist: 36, target: V3(0, 7, 2.5) } },
   'Landmine press': { pose: landminePose, gear: landmineGear, period: 4.5, view: { theta: 1.0, phi: 1.3, dist: 38, target: V3(0, 10, 4) } },
+  // batch 6
+  'Suitcase carry': { pose: suitcaseCarryPose, gear: suitcaseGear, period: 1.6, view: { theta: 0.6, phi: 1.42, dist: 34, target: V3(0, 9, 0) } },
+  'Copenhagen plank': { pose: copenhagenPose, gear: copenhagenGear, period: 6, view: { theta: 0.2, phi: 1.3, dist: 34, target: V3(1, 4.5, 0) } },
+  'Cable woodchop': { pose: woodchopPose, gear: woodchopGear, period: 4, view: { theta: 0.25, phi: 1.4, dist: 38, target: V3(1, 10, 0) } },
+  'Stir the pot': { pose: stirPotPose, gear: stirPotGear, period: 4, view: { theta: 0.5, phi: 1.3, dist: 33, target: V3(1, 5, 0) } },
+  'Pallof press': { pose: pallofPose, gear: pallofGear, period: 4, view: { theta: -0.5, phi: 1.35, dist: 34, target: V3(1.5, 10, 1) } },
+  'Leg press': { pose: legPressPose, gear: legPressGear, period: 5, view: { theta: 0.55, phi: 1.3, dist: 36, target: V3(2, 5.5, 0) } },
+  'Walking lunge': { pose: lungePose, gear: matGear, period: 6, view: { theta: 1.1, phi: 1.4, dist: 34, target: V3(0, 8, 0) } },
+  'Seated calf raise': { pose: seatedCalfPose, gear: seatedCalfGear, period: 3.5, view: { theta: 1.15, phi: 1.4, dist: 30, target: V3(0, 5.5, 3) } },
+  'Tibialis raise': { pose: tibialisPose, gear: tibialisGear, period: 3, view: { theta: 1.2, phi: 1.4, dist: 32, target: V3(0, 7, 0.5) } },
+  'Neck curl': { pose: neckCurlPose, gear: neckCurlGear, period: 4, view: { theta: -0.9, phi: 1.2, dist: 28, target: V3(-3, 6, 0) } },
   'Couch stretch': { pose: couchPose, gear: couchGear, period: 6, side: 1, /* right (rear) leg stretched */ view: { theta: 1.25, phi: 1.3, dist: 30, target: V3(0, 6, 0.5) } },
 };
 for (const [name, def] of Object.entries(MOTIONS)) def.name = name;
@@ -2141,6 +2152,156 @@ function landminePose(u) {
   };
 }
 
+// ---------- batch 6: carries, anti-rotation, leg press, lunge, calves, neck ----------
+// walking gait on the spot (treadmill style), one period = left step + right step. stride: hip swing (rad),
+// lift: knee bend in the swing phase. returns legs and the arm swing per side (+ = forwards)
+function gait(ph, stride = 0.38, lift = 1.0) {
+  const c = Math.sin(2 * Math.PI * ph);
+  const legs = [c, -c].map((sw, j) => {
+    const swing = Math.max(0, Math.cos(2 * Math.PI * ph + (j ? Math.PI : 0)));   // leg travelling forwards
+    return { fk: { flex: stride * sw, knee: 0.12 + lift * swing * 0.9, ankle: 0.1 * swing } };
+  });
+  return { legs, arm: [-c, c], bob: 0.12 * Math.abs(Math.cos(2 * Math.PI * ph)) };
+}
+// arm swinging by the side (relaxed or holding something), forwards by sw
+function swingArm(root, s, sw, holding) {
+  const a = hang(root, s, holding);
+  a.to = a.to.clone().add(dirW(root, V3(0, Math.abs(sw) * 0.3, sw * 1.6)));
+  return a;
+}
+// suitcase carry: one heavy dumbbell in the right hand, walking tall without leaning towards it
+function suitcaseCarryPose(u, ph) {
+  const g = gait(ph, 0.3, 0.8), root = { q: new THREE.Quaternion(), p: V3(0, -g.bob, 0) }, [l, r] = rig.sides;
+  return { root, spine: { side: -0.03 }, scap: [{}, { elev: -0.08 }], arms: [swingArm(root, l, g.arm[0], false), hang(root, r, true)], legs: g.legs };
+}
+
+// copenhagen plank: side plank on the right forearm with the top (left) leg on a bench; the bottom leg hangs free
+const COPEN_Y = 4.4;
+function copenhagenPose(u) {
+  const [l, r] = rig.sides, pivot = V3(0, 0.4, -0.2);
+  const rootFor = t => rootAt(headUp(ON_SIDE, t), pivot, V3(7.5, COPEN_Y + 0.4, 0));
+  const t0 = solve1(t => toW(rootFor(t), r.S).y, r.L1 * 0.98 + 0.4, -0.8, 0.8);
+  const hold = rootFor(t0), root = rootFor(t0 - 0.05 * u);
+  const Sr = toW(hold, r.S);
+  return {
+    root, scap: [{}, { prot: 0.1, elev: -0.1 }],
+    arms: [
+      armTo(toW(root, V3(1.7, 9.6, 0.4)), dirW(root, V3(0, 0, -1)), dirW(root, V3(-1, 0, 0)), { point: 'palm', fingers: dirW(root, V3(0, -1, 0.3)), curl: FLAT }),
+      armTo(V3(Sr.x, 0.4, Sr.z + r.L2 * 0.98), V3(0, -1, 0), V3(0, -1, 0), { point: 'wrist', fingers: V3(0, 0, 1), curl: RELAX }),
+    ],
+    legs: [{ fk: { abd: -0.05 } }, { fk: { abd: lerp(0.35, 0.05, u), knee: 0.1 } }],   // bottom leg lifts towards the top one
+  };
+}
+
+// cable woodchop (high to low): cable from high on the left; both hands pull the handle diagonally across the body
+// to beside the right knee while the trunk turns
+const CHOP = { pulley: V3(7, 17.5, 0.8) };
+function woodchopPose(u) {
+  const root = { q: new THREE.Quaternion(), p: V3(0, -lerp(0.1, 0.9, u), 0) }, spine = { twist: lerp(0.45, -0.5, u), flex: lerp(0, 0.25, u) };
+  const h = vlerp(V3(3.4, 15.6, 2.4), V3(-2.9, 7.2, 2.6), u), d = V3(3.4 - -2.9, 15.6 - 7.2, 0).normalize();
+  return {
+    root, spine,
+    arms: rig.sides.map((s, j) => armTo(h.clone().addScaledVector(d, j ? -0.35 : 0.35), V3(s.sg * 0.5, -1, -0.3), V3(0, 0, -1))),
+    legs: rig.sides.map(s => footFlat(V3(s.sg * 1.9, s.A.y, 0.3), V3(s.sg * 0.3, 0, 1), V3(s.sg * 0.3, 0, 1))),
+  };
+}
+
+// stir the pot: forearm plank with the elbows on a stability ball; the forearms draw small circles
+const BALL = { r: 3.2, x: 0 };
+function stirPotPose(u, ph) {
+  const toe = V3(0, 0.08, rig.toeZ), L = rig.sides[0], top = 2 * BALL.r;
+  const rootFor = a => rootAt(headUp(ON_FRONT, a), toe, V3(9.5, 0.1, 0));
+  const root = rootFor(solve1(a => toW(rootFor(a), L.S).y, top + L.L1 * 0.95 + 0.1, 0, 1.2));
+  const c = V3(Math.cos(2 * Math.PI * ph), 0, Math.sin(2 * Math.PI * ph)).multiplyScalar(0.55);
+  BALL.x = toW(root, L.S).x - 0.4;
+  return {
+    root, scap: both({ prot: 0.12 }),
+    arms: rig.sides.map(s => {
+      const S = toW(root, s.S);
+      return armTo(V3(S.x - s.L2 * 0.9, top + 0.25, S.z * 0.4).add(c), V3(0.2, -1, 0), V3(0, -1, 0), { point: 'wrist', fingers: V3(-1, 0, 0), curl: RELAX });
+    }),
+    legs: [STAND, STAND],
+  };
+}
+
+// pallof press: side-on to a cable at chest height (cable on the left); hands press straight out from the sternum and
+// back without letting the trunk turn
+function pallofPose(u) {
+  const root = { q: new THREE.Quaternion(), p: V3(0, -0.4, 0) }, y = rig.yChest + 0.2, z0 = rig.chestZAt(rig.yChest) + 0.9;
+  const z = lerp(z0, z0 + rig.gripReach * 0.82, u);
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(V3(s.sg * 0.25, y, z), V3(s.sg, -0.8, -0.3).normalize(), V3(-s.sg, 0, 0))),
+    legs: rig.sides.map(s => footFlat(V3(s.sg * 1.6, s.A.y, 0.4), V3(s.sg * 0.3, 0, 1))),
+  };
+}
+
+// leg press (45° sled): reclined seat, feet on the plate; knees from deeply bent to almost straight
+const LP = { hip: V3(0, 3.6, 0), dir: V3(Math.SQRT1_2, Math.SQRT1_2, 0) };
+function legPressPose(u) {
+  const h = midHips(), root = rootAt(headUp(ON_BACK, 0.75), V3(0, h.y, rig.zBack), LP.hip.clone().add(V3(-0.6, 0, 0)));
+  const L = rig.sides[0], Hw = toW(root, h), d = lerp(3.6, (L.lt + L.ls) * 0.93, u);
+  const up = V3(-Math.SQRT1_2, Math.SQRT1_2, 0);
+  LP.plate = Hw.clone().addScaledVector(LP.dir, d + 0.55).addScaledVector(up, 1.1).setZ(0);   // under the soles, centred on the balls of the feet
+  return {
+    root,
+    arms: rig.sides.map(s => { const H = toW(root, s.H); return armTo(V3(H.x - 0.6, H.y + 0.4, -s.sg * 2.6), dirW(root, V3(s.sg * 0.4, 0, -1)), V3(0, 0, s.sg)); }),   // side handles (left side is at -z lying back)
+    legs: rig.sides.map(s => ({ to: Hw.clone().addScaledVector(LP.dir, d).setZ(-s.sg * 1.3), pole: up.clone().add(V3(0, 0, s.sg * -0.4)).normalize(), toe: up, down: LP.dir })),
+  };
+}
+
+// walking lunge (on the spot): one leg steps forwards and both knees bend until the back knee is near the floor;
+// then the other leg
+function lungePose(u, ph) {
+  const e = Math.abs(Math.sin(2 * Math.PI * ph)), front = (ph % 1) < 0.5 ? 0 : 1, h = midHips();
+  const root = rootAt(qAxis(AXIS_X, 0.05), h, V3(0, lerp(h.y - 0.05, h.y - 3.0, e), lerp(0, 0.2, e)));
+  return {
+    root,
+    arms: rig.sides.map(s => hang(root, s, false)),
+    legs: rig.sides.map((s, j) => j === front
+      ? footFlat(V3(s.sg * 0.9, s.A.y, 2.9 * e), V3(s.sg * 0.1, 0, 1))
+      : { to: V3(s.sg * 0.9, s.A.y + 0.8 * e, -2.8 * e), pole: V3(0, -0.3, 1).normalize(), toe: V3(0, -0.6 * e, 1).normalize(), down: V3(0, -1, -0.6 * e).normalize() }),
+  };
+}
+
+// seated calf raise: seated, pad on the knees, balls of the feet on a block; heels drop below, then rise high
+function seatedCalfPose(u) {
+  const root = seatedRoot(), th = lerp(-0.35, 0.55, u), Lf = 1.7;
+  gearPts.knees = [];
+  return {
+    root, arms: seatHandles(),
+    legs: rig.sides.map(s => {
+      const H = toW(root, s.H), B = V3(s.sg * 1.2, 1.3, H.z + s.lt + 1.3);
+      const A = B.clone().add(V3(0, 0.65 + Lf * Math.sin(th), -Lf * Math.cos(th)));
+      gearPts.knees.push(ik2(H, A, s.lt, s.ls, V3(0, 0.3, 1)).mid);
+      const toe = B.clone().sub(A).normalize();
+      return { to: A, pole: V3(0, 0.3, 1), toe, down: perpTo(V3(0, -1, 0), toe) };
+    }),
+  };
+}
+
+// tibialis raise: back leaning on a wall, heels on the floor out in front; the toes pull up towards the shins
+function tibialisPose(u) {
+  const h = midHips(), root = rootAt(qAxis(AXIS_X, -0.22), h, V3(0, h.y - 0.4, -0.5));
+  const toe = V3(0, lerp(0, 0.75, u), 1).normalize();
+  return {
+    root,
+    arms: rig.sides.map(s => hang(root, s, false)),
+    legs: rig.sides.map(s => ({ to: V3(s.sg * 1.0, s.A.y, 2.4), pole: V3(0, 0, 1), toe, down: perpTo(V3(0, -1, 0), toe) })),
+  };
+}
+
+// neck curl: lying face up on a bench with the head off the end; the chin drops back, then curls towards the chest
+function neckCurlPose(u) {
+  const root = { q: ON_BACK, p: V3(BENCH_X + 1.6, BENCH_Y - rig.zBack, 0) };
+  return {
+    root, head: { flex: lerp(-0.55, 0.55, u) },
+    arms: rig.sides.map(s => armTo(toW(root, V3(-s.sg * 1.3, rig.yChest + 0.6, rig.chestZAt(rig.yChest) + 0.5)), dirW(root, V3(s.sg * 0.3, -1, 0.3)),
+      dirW(root, V3(0, 0, -1)), { point: 'palm', fingers: dirW(root, V3(-s.sg, 0.6, 0)), curl: RELAX })),
+    legs: rig.sides.map(s => { const H = toW(root, s.H); return footFlat(V3(H.x + 4.3, s.A.y, H.z * 1.9), V3(0.3, 1, 0), V3(1, 0, 0)); }),
+  };
+}
+
 // ---------- equipment ----------
 // each gear(group) builds the exercise's equipment once and may return update(hands) for the moving parts.
 // hands = { grip: [left, right] grip points, lat: [left, right] sideways axes through the fists } (world)
@@ -2457,6 +2618,48 @@ function highRowGear(g) {
     cable.span(V3(0, 12.8, 8.4), knot);
   };
 }
+
+function suitcaseGear(g) {
+  const bell = dumbbell(g);
+  return h => alongZ(bell, h.grip[1], h.lat[1]);
+}
+function copenhagenGear(g) { matGear(g); box(g, 4, COPEN_Y, 3.4, GEAR_MAT.pad, 8.4, COPEN_Y / 2, 0.6); }
+function woodchopGear(g) {
+  cableTower(g, CHOP.pulley.x, CHOP.pulley.z, CHOP.pulley.y);
+  const handle = new THREE.Group(); g.add(handle); cylZ(handle, 0.13, 1.0, GEAR_MAT.steel, 0, 10);
+  const cable = rod(g, 0.06, GEAR_MAT.cable);
+  return h => { const m = h.grip[0].clone().add(h.grip[1]).multiplyScalar(0.5); alongZ(handle, m, h.grip[1].clone().sub(h.grip[0])); cable.span(CHOP.pulley.clone().add(V3(-0.5, 0, 0)), m); };
+}
+function stirPotGear(g) {
+  matGear(g);
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(BALL.r, 40, 24), GEAR_MAT.fabric); g.add(ball);
+  return () => ball.position.set(BALL.x, BALL.r, 0);
+}
+function pallofGear(g) {
+  const y = rig.yChest - 0.2;
+  cableTower(g, 9, 2.2, y);
+  const handle = new THREE.Group(); g.add(handle); cylZ(handle, 0.13, 0.9, GEAR_MAT.steel, 0, 10);
+  const cable = rod(g, 0.06, GEAR_MAT.cable);
+  return h => { const m = h.grip[0].clone().add(h.grip[1]).multiplyScalar(0.5); handle.position.copy(m); handle.rotation.set(Math.PI / 2, 0, 0); cable.span(V3(8.5, y, 2.2), m); };
+}
+function legPressGear(g) {
+  // seat and back rest, the sled on 45° rails, a plate under the feet that follows them
+  box(g, 3.4, 0.5, 4.2, GEAR_MAT.pad, LP.hip.x + 0.3, LP.hip.y - 1.1, 0);
+  const bk = box(g, 7, 0.5, 4.2, GEAR_MAT.pad, LP.hip.x - 3.4, LP.hip.y + 1.3, 0); bk.rotation.z = -0.75 + Math.PI;
+  box(g, 1, LP.hip.y - 1.3, 3, GEAR_MAT.frame, LP.hip.x, (LP.hip.y - 1.3) / 2, 0);
+  for (const sg of [1, -1]) rod(g, 0.2, GEAR_MAT.steel).span(V3(LP.hip.x + 4, 0.5, sg * 2.6), V3(LP.hip.x + 15, 11.5, sg * 2.6));
+  const plate = box(g, 0.4, 5.2, 5.6, GEAR_MAT.frame, 0, 0, 0); plate.rotation.z = Math.PI / 4;
+  return () => plate.position.copy(LP.plate);
+}
+function seatedCalfGear(g) {
+  legMachine(g, false);
+  const z = midHips().z + rig.sides[0].lt + 1.3;
+  box(g, 4.2, 0.8, 1.6, GEAR_MAT.frame, 0, 0.6, z + 0.3);   // block under the balls of the feet
+  const pad = cylZ(g, 0.5, 4.4, GEAR_MAT.pad); pad.rotation.y = Math.PI / 2;
+  return () => { const k = gearPts.knees; pad.position.set(0, Math.max(k[0].y, k[1].y) + 0.75, (k[0].z + k[1].z) / 2 - 0.4); };
+}
+function tibialisGear(g) { box(g, 16, 22, 0.6, GEAR_MAT.fabric, 0, 11, -0.5 + rig.zBack - midHips().z - 2.2); }
+function neckCurlGear(g) { flatBench(g, BENCH_X + 1.6 - 14.6, BENCH_X + 1.6 - 4, BENCH_Y); }
 
 // ---------- putting the pose on the body ----------
 const GEARS = new Map();   // exercise name -> { group, update }
