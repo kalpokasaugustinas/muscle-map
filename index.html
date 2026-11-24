@@ -1874,8 +1874,8 @@ function assistedPullUpPose(u) {
 const DIP_Y = 12;
 function dipPose(u) {
   const L = rig.sides[0], lean = lerp(0.12, 0.35, u);
-  const top = DIP_Y + rig.reach * 0.95 - L.S.y;
-  const root = rootAt(qAxis(AXIS_X, lean), L.S.clone().setX(0), V3(0, L.S.y + lerp(top, top - 2.9, u), lerp(0, 0.6, u)));
+  const top = DIP_Y + rig.gripReach * 0.97 - L.S.y;   // arms locked out at the top
+  const root = rootAt(qAxis(AXIS_X, lean), L.S.clone().setX(0), V3(0, L.S.y + lerp(top, top - 3.7, u), lerp(0, 0.6, u)));   // down until the upper arms are about level
   return {
     root,
     arms: rig.sides.map(s => armTo(V3(s.sg * 2.7, DIP_Y, 0.4), V3(s.sg * 0.35, 0, -1), V3(s.sg * 0.15, -1, 0).normalize(),
@@ -2667,7 +2667,9 @@ function catCowPose(u) {
 // open book: lying on the right side, knees bent 90° and stacked, arms straight in front; the top arm opens over to
 // the floor behind while the upper back turns and the head follows
 function openBookPose(u) {
-  const root = rootAt(ON_SIDE, V3(-2.0, 10.5, 0), V3(0, 0.25, 0)), arm = lerp(0, 2.7, u), spine = { twist: 0.42 * arm };
+  // the top arm sweeps over until the hand is near the floor behind (past straight up, so a little below level);
+  // the upper back turns about 50° of it, the rest is the shoulder opening. body centred on the mat (knees in front)
+  const root = rootAt(ON_SIDE, V3(-2.0, 10.5, 0), V3(0, 0.25, -1.8)), arm = lerp(0, 3.5, u), spine = { twist: 0.26 * arm };
   const [l, r] = rig.sides;
   const dir = dirW(root, V3(Math.sin(arm), 0, Math.cos(arm)));
   return {
@@ -2911,8 +2913,9 @@ function seatedLegCurlGear(g) {
   return upd;
 }
 function lyingLegCurlGear(g) {
-  box(g, 15, 0.6, 2.8, GEAR_MAT.pad, -6.0, CURL_BENCH_Y - 0.3, 0);
-  for (const x of [-11.5, 0.5]) box(g, 0.5, CURL_BENCH_Y - 0.6, 0.5, GEAR_MAT.frame, x, (CURL_BENCH_Y - 0.6) / 2, 0);
+  // pad from the head to just above the knees, so the thighs lie on it and only the lower legs move
+  box(g, 18.6, 0.6, 2.8, GEAR_MAT.pad, -4.2, CURL_BENCH_Y - 0.3, 0);
+  for (const x of [-11.5, 4.0]) box(g, 0.5, CURL_BENCH_Y - 0.6, 0.5, GEAR_MAT.frame, x, (CURL_BENCH_Y - 0.6) / 2, 0);
   for (const sg of [1, -1]) box(g, 0.3, 0.3, 1.2, GEAR_MAT.steel, -10.5, CURL_BENCH_Y - 0.9, sg * 2.3);   // handles
   const pad = cylZ(g, 0.5, 4.2, GEAR_MAT.pad);   // across the legs (along z)
   return () => pad.position.copy(gearPts.shinPad);
