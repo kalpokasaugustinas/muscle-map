@@ -2113,9 +2113,9 @@ function highRowPose(u) {
 
 // back extension (45° bench): hips on the pad, heels under the roller; the trunk lowers with a rounded back,
 // then rises until the body is one straight line (no arching past it)
-const BX = { lean: 0.8, pad: V3(0, 8.2, 1.2) };
+const BX = { lean: 0.8, pad: V3(0, 10, 1.2) };   // lean from vertical at the top (45°); hip pad height
 function backExtensionPose(u) {
-  const h = midHips(), lean = lerp(1.6, BX.lean, u), spine = { flex: lerp(0.4, 0, u) };
+  const h = midHips(), lean = lerp(2.35, BX.lean, u), spine = { flex: lerp(0.35, 0, u) };
   const root = rootAt(qAxis(AXIS_X, lean), h, BX.pad);
   const cq = root.q.clone().multiply(spineQ(spine, 1));
   return {
