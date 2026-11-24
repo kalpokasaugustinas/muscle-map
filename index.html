@@ -851,6 +851,17 @@ const MOTIONS = {
     pose: doorwayPose, gear: doorwayGear, period: 6,
     view: { theta: 0.75, phi: 1.25, dist: 36, target: V3(0, 11, 0.5) },
   },
+  // batch 1
+  'Dumbbell curl': { pose: dumbbellCurlPose, gear: dumbbellGear, period: 4.5, view: { theta: 0.9, phi: 1.4, dist: 30, target: V3(0, 10, 0.5) } },
+  'Hammer curl': { pose: hammerCurlPose, gear: dumbbellGear, period: 4.5, view: { theta: 0.9, phi: 1.4, dist: 30, target: V3(0, 10, 0.5) } },
+  'Barbell curl': { pose: barbellCurlPose, gear: barGear(), period: 4.5, view: { theta: 0.85, phi: 1.4, dist: 32, target: V3(0, 10, 0.5) } },
+  'Front raise': { pose: frontRaisePose, gear: dumbbellGear, period: 4.5, view: { theta: 1.0, phi: 1.4, dist: 32, target: V3(0, 11, 1) } },
+  'Overhead press': { pose: overheadPressPose, gear: barGear(1.9), period: 5, view: { theta: 0.8, phi: 1.45, dist: 36, target: V3(0, 12, 0.5) } },
+  'Dumbbell shoulder press': { pose: dumbbellPressPose, gear: pressSeatGear, period: 5, view: { theta: 0.55, phi: 1.4, dist: 34, target: V3(0, 10.5, 0.5) } },
+  'Goblet squat': { pose: gobletSquatPose, gear: gobletGear, period: 5, view: { theta: 1.0, phi: 1.4, dist: 33, target: V3(0, 8, 0) } },
+  'Back squat': { pose: backSquatPose, gear: barGear(2.25, 2), period: 5.5, view: { theta: 0.9, phi: 1.38, dist: 38, target: V3(0, 8.5, 0) } },
+  'Glute bridge': { pose: gluteBridgePose, gear: matGear, period: 4.5, view: { theta: 0.45, phi: 1.2, dist: 30, target: V3(3, 2.5, 0) } },
+  'Standing calf raise': { pose: calfRaisePose, gear: dumbbellGear, period: 4, view: { theta: 1.1, phi: 1.45, dist: 32, target: V3(0, 7, 0) } },
   'Couch stretch': { pose: couchPose, gear: couchGear, period: 6, side: 1, /* right (rear) leg stretched */ view: { theta: 1.25, phi: 1.3, dist: 30, target: V3(0, 6, 0.5) } },
 };
 for (const [name, def] of Object.entries(MOTIONS)) def.name = name;
@@ -1413,6 +1424,115 @@ function couchPose(u) {
   };
 }
 
+// ---------- batch 1: standing arm work, presses, squats, bridge, calf raise ----------
+const STANDING = () => ({ q: new THREE.Quaternion(), p: V3() });
+const midHips = () => rig.sides[0].H.clone().add(rig.sides[1].H).multiplyScalar(0.5);
+
+// curl arm: upper arm stays by the side, the forearm swings up from hanging (a = 0) by angle a.
+// palm: 'up' (supinated: faces forwards at the bottom, the shoulder at the top) or 'in' (hammer: faces the body)
+function curlArm(root, s, a, palm) {
+  const E = toW(root, s.E.clone().add(V3(s.sg * 0.05, 0, 0.05)));
+  const f = dirW(root, V3(0, -Math.cos(a), Math.sin(a)));
+  const p = palm === 'in' ? dirW(root, V3(-s.sg, 0, 0)) : dirW(root, V3(0, Math.sin(a), Math.cos(a)));
+  return armTo(E.addScaledVector(f, s.L2), dirW(root, V3(0, -0.3, -1)), p, { point: 'wrist', fingers: f });
+}
+const curlAngle = u => lerp(0.12, 2.35, u);
+function dumbbellCurlPose(u) { const root = STANDING(); return { root, arms: rig.sides.map(s => curlArm(root, s, curlAngle(u), 'up')), legs: [STAND, STAND] }; }
+function hammerCurlPose(u) { const root = STANDING(); return { root, arms: rig.sides.map(s => curlArm(root, s, curlAngle(u), 'in')), legs: [STAND, STAND] }; }
+// barbell curl: the same arc, a slightly shorter top (the bar stops in front of the shoulders)
+function barbellCurlPose(u) { const root = STANDING(); return { root, arms: rig.sides.map(s => curlArm(root, s, lerp(0.2, 2.2, u), 'up')), legs: [STAND, STAND] }; }
+
+// front raise: straight arms from in front of the thighs up to shoulder height, palms down
+function frontRaisePose(u) {
+  const root = STANDING(), a = lerp(0.18, 1.5, u);
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(s.S.clone().add(V3(s.sg * 0.12, -Math.cos(a), Math.sin(a)).normalize().multiplyScalar(rig.gripReach * 0.95)),
+      V3(s.sg, -0.2, 0), V3(0, -Math.sin(a), -Math.cos(a)))),
+    legs: [STAND, STAND],
+  };
+}
+
+// overhead press (standing barbell): bar from the front of the shoulders straight up to locked arms overhead.
+// it stays in front of the face until it is past the head, then comes back over the shoulders (vertical in world space)
+function overheadPressPose(u) {
+  const root = STANDING(), L = rig.sides[0], gripX = 2.3;
+  const yBot = L.S.y + 0.35, yTop = L.S.y + Math.sqrt(rig.gripReach ** 2 * 0.94 - (gripX - L.S.x) ** 2);
+  const y = lerp(yBot, yTop, u), z = lerp(L.S.z + 2.0, L.S.z + 0.35, sstep(0.45, 1, u));
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(V3(s.sg * gripX, y, z), vlerp(V3(s.sg * 0.4, -1, 0.7), V3(s.sg, -0.3, 0), u).normalize(),
+      vlerp(V3(0, 0.75, 0.65), V3(0, 0.15, 1), u).normalize())),
+    legs: [STAND, STAND],
+  };
+}
+
+// seated dumbbell shoulder press: upright bench, dumbbells from beside the ears to overhead, palms forwards
+const PRESS_SEAT_Y = 5.6;   // hip height when seated
+const seatedRoot = () => rootAt(new THREE.Quaternion(), midHips(), V3(0, PRESS_SEAT_Y, 0));
+function dumbbellPressPose(u) {
+  const root = seatedRoot(), L = rig.sides[0];
+  const top = L.S.y + rig.gripReach * 0.93;
+  return {
+    root,
+    arms: rig.sides.map(s => {
+      const S = toW(root, s.S);
+      const to = vlerp(V3(s.sg * (Math.abs(S.x) + 1.9), S.y + 0.7, S.z + 0.5), V3(s.sg * (Math.abs(S.x) + 0.5), toW(root, V3(0, top, 0)).y, S.z + 0.3), u);
+      return armTo(to, V3(s.sg, -1, -0.1), V3(0, 0, 1));
+    }),
+    legs: rig.sides.map(s => footFlat(V3(s.sg * 1.8, s.A.y, 4.4), V3(s.sg * 0.3, 1, 0.3))),
+  };
+}
+
+// squat (goblet / back squat): hips go down and back, the trunk leans forwards, feet stay flat and a little turned out
+function squatRoot(u, lean) {
+  const h = midHips();
+  return rootAt(qAxis(AXIS_X, lerp(0.03, lean, u)), h, V3(0, lerp(h.y - 0.05, 5.4, u), lerp(0, -1.7, u)));
+}
+const squatLegs = () => rig.sides.map(s => footFlat(V3(s.sg * 1.5, s.A.y, 0.5), V3(s.sg * 0.35, 0, 1), V3(s.sg * 0.25, 0, 1)));
+// goblet squat: one dumbbell held upright against the chest, hands cupping its top end
+function gobletSquatPose(u) {
+  const root = squatRoot(u, 0.32);
+  const c = toW(root, V3(0, rig.yChest + 0.3, rig.chestZAt(rig.yChest) + 1.3));
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(c.clone().add(dirW(root, V3(s.sg * 0.55, 0, 0))), dirW(root, V3(s.sg * 0.3, -1, 0.1)),
+      dirW(root, V3(-s.sg, 0.5, 0)).normalize(), { point: 'palm', fingers: dirW(root, V3(0, 1, 0.3)), curl: RELAX })),
+    legs: squatLegs(),
+  };
+}
+// back squat: bar on the upper traps, wide grip, more forward lean
+function backSquatPose(u) {
+  const root = squatRoot(u, 0.55), L = rig.sides[0];
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * 3.4, L.S.y + 0.55, rig.zBack - 0.1)), dirW(root, V3(s.sg * 0.3, -1, -0.6)),
+      dirW(root, V3(0, 0.3, 1)).normalize())),
+    legs: squatLegs(),
+  };
+}
+
+// glute bridge: on the back, knees bent, feet flat; the hips lift until the body is straight from knees to shoulders
+function gluteBridgePose(u) {
+  const L = rig.sides[0], pivot = V3(0, L.S.y - 1.2, rig.zBack);
+  const rootFor = a => rootAt(headUp(ON_BACK, -a), pivot, V3(0, 0.2, 0));
+  const rest = rootFor(0), root = rootFor(lerp(0, 0.42, u));
+  return {
+    root,
+    arms: rig.sides.map(s => {
+      const S = toW(rest, s.S);
+      return armTo(V3(S.x + 0.95 * rig.reach, 0.35, S.z * 1.25), V3(0, 1, 0), V3(0, -1, 0), { point: 'wrist', curl: RELAX });
+    }),
+    legs: rig.sides.map(s => { const H = toW(rest, s.H); return footFlat(V3(H.x + 5.2, s.A.y, H.z * 1.2), V3(0, 1, 0), V3(1, 0, 0)); }),
+  };
+}
+
+// standing calf raise: dumbbells in the hands, the body rises onto the balls of the feet and lowers again
+function calfRaisePose(u) {
+  const t = lerp(0, 0.6, u), root = { q: new THREE.Quaternion(), p: V3(0, 1.45 * Math.sin(t), 0) };
+  return { root, arms: rig.sides.map(s => hang(root, s, true)), legs: rig.sides.map(() => ({ fk: { ankle: t } })) };
+}
+
 // ---------- equipment ----------
 // each gear(group) builds the exercise's equipment once and may return update(hands) for the moving parts.
 // hands = { grip: [left, right] grip points, lat: [left, right] sideways axes through the fists } (world)
@@ -1451,14 +1571,14 @@ function rod(parent, r, mat) {
 // puts an object (built along local z) at p with its z axis along dir
 const alongZ = (o, p, dir) => { o.position.copy(p); o.quaternion.setFromUnitVectors(AXIS_Z, dir.clone().normalize()); };
 // 2.2 m olympic bar with two 20 kg plates a side (along local z)
-function barbell(parent) {
+// plateR / plates: smaller and fewer plates for lighter lifts (curls, presses)
+function barbell(parent, plateR = 2.25, plates = 2) {
   const g = new THREE.Group(); parent.add(g);
   cylZ(g, 0.14, 13.1, GEAR_MAT.steel, 0, 16);
   for (const sg of [1, -1]) {
     cylZ(g, 0.25, 4.45, GEAR_MAT.steel, sg * 8.8, 16);
     cylZ(g, 0.42, 0.25, GEAR_MAT.steel, sg * 6.7);
-    cylZ(g, 2.25, 0.5, GEAR_MAT.plate, sg * 7.1, 48);
-    cylZ(g, 2.25, 0.5, GEAR_MAT.plate, sg * 7.65, 48);
+    for (let i = 0; i < plates; i++) cylZ(g, plateR, 0.5, GEAR_MAT.plate, sg * (7.1 + 0.55 * i), 48);
   }
   return g;
 }
@@ -1563,6 +1683,25 @@ function couchGear(g) {
   for (const sg of [1, -1]) box(g, 1.0, 5.6, 4.2, GEAR_MAT.fabric, -0.5 + sg * 5, 2.8, -3.7);   // armrests
 }
 
+// barbell held in both hands (lighter plates by default)
+// (a function declaration: MOTIONS calls it before this point of the script runs)
+function barGear(plateR = 1.6, plates = 1) { return g => { const bar = barbell(g, plateR, plates); return h => barBetween(bar, h); }; }
+function pressSeatGear(g) {
+  // upright bench: seat under the hips, back pad behind the trunk
+  const back = rig.zBack - midHips().z;
+  box(g, 3.2, 0.5, 3.4, GEAR_MAT.pad, 0, PRESS_SEAT_Y - 1.1, back + 1.9);
+  box(g, 3.0, 8.5, 0.5, GEAR_MAT.pad, 0, PRESS_SEAT_Y + 3.6, back - 0.3);
+  box(g, 0.5, PRESS_SEAT_Y - 1.3, 0.5, GEAR_MAT.frame, 0, (PRESS_SEAT_Y - 1.3) / 2, back + 1.9);
+  box(g, 0.5, PRESS_SEAT_Y + 0.5, 0.5, GEAR_MAT.frame, 0, (PRESS_SEAT_Y + 0.5) / 2, back - 0.7);
+  box(g, 0.5, 0.25, 4.0, GEAR_MAT.frame, 0, 0.12, back + 1.0);
+  return dumbbellGear(g);
+}
+function gobletGear(g) {
+  // one dumbbell standing upright, its top end in the hands
+  const bell = dumbbell(g);
+  return h => alongZ(bell, h.grip[0].clone().add(h.grip[1]).multiplyScalar(0.5).add(V3(0, -0.75, 0)), AXIS_Y);
+}
+
 // ---------- putting the pose on the body ----------
 const GEARS = new Map();   // exercise name -> { group, update }
 function gearOf(def) {
@@ -1626,6 +1765,32 @@ function withRestPose(fn) {
   }
 }
 
+// test hook for tools/motion_shots.py: select an exercise, hold its pose at u (0 start, 1 end), snap the camera
+let motionFreeze = null;
+window.mmTest = {
+  motions: () => Object.keys(MOTIONS),
+  show(name, u) {
+    state.exercise = exByName[name] || null; motionFreeze = u;
+    renderPanel(); refresh();
+    updateMotion(0);
+    if (motion) motion.blend = 1;
+    updateMotion(0);
+    // put the camera straight at the exercise's view instead of easing there
+    if (motion && motion.def) {
+      const v = motion.def.view;
+      controls.target.copy(v.target);
+      camera.position.setFromSphericalCoords(viewDist(v), v.phi, v.theta).add(v.target);
+      camGoal = null; camDist = null;
+    }
+    // draw now and hand back the picture (software rendering in tests is too slow to wait for frames)
+    thumbQueue.length = 0;
+    controls.update();
+    renderer.render(scene, camera);
+    renderBorders();
+    return renderer.domElement.toDataURL('image/png');
+  },
+};
+
 // called every frame: starts / runs / switches / ends the motion of the selected exercise
 function updateMotion(dt) {
   const def = motionOf(state.exercise);
@@ -1649,8 +1814,9 @@ function updateMotion(dt) {
   gear.visible = !!motion.def && b > 0.92;
   if (motion.def) {
     // slow, even rep: starts at u = 0, reaches u = 1 half way through the period
-    const ph = (motion.t / motion.def.period) % 1;
-    solvePose(motion.def.pose(0.5 - 0.5 * Math.cos(2 * Math.PI * ph), ph));
+    // (test hook: motionFreeze holds the pose at u = motionFreeze, used for start / end screenshots)
+    const ph = motionFreeze !== null ? motionFreeze * 0.5 : (motion.t / motion.def.period) % 1;
+    solvePose(motion.def.pose(motionFreeze !== null ? motionFreeze : 0.5 - 0.5 * Math.cos(2 * Math.PI * ph), ph));
     gearOf(motion.def);
   }
   blendShown(motion.from, b, !motion.def);
