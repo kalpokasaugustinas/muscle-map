@@ -896,6 +896,17 @@ const MOTIONS = {
   'Bicycle crunch': { pose: bicyclePose, gear: matGear, period: 3, view: { theta: 0.5, phi: 1.15, dist: 30, target: V3(3, 2.5, 0) } },
   'Russian twist': { pose: russianTwistPose, gear: matGear, period: 3, view: { theta: 0.6, phi: 1.3, dist: 30, target: V3(0, 4, 2) } },
   'Cable crunch': { pose: cableCrunchPose, gear: cableCrunchGear, period: 4.5, view: { theta: 1.2, phi: 1.4, dist: 34, target: V3(0, 7, 1) } },
+  // batch 5
+  'Barbell shrug': { pose: shrugPose, gear: barGear(2.0, 2), period: 3.5, view: { theta: 0.9, phi: 1.42, dist: 32, target: V3(0, 11, 0) } },
+  'Push-up plus': { pose: pushUpPlusPose, gear: matGear, period: 3.5, view: { theta: 0.45, phi: 1.22, dist: 30, target: V3(0.5, 3, 0) } },
+  'Scapular push-up': { pose: scapularPushUpPose, gear: matGear, period: 3.5, view: { theta: 0.45, phi: 1.22, dist: 30, target: V3(0.5, 3, 0) } },
+  'Wall slides': { pose: wallSlidePose, gear: wallGear, period: 5, view: { theta: 0.45, phi: 1.42, dist: 34, target: V3(0, 12, 0) } },
+  'Cable serratus punch': { pose: serratusPunchPose, gear: serratusGear, period: 3.5, side: 1, view: { theta: -1.0, phi: 1.3, dist: 32, target: V3(0, 12, 1) } },
+  'Chest-supported row': { pose: chestSupportedRowPose, gear: chestRowGear, period: 4.5, view: { theta: 0.7, phi: 1.3, dist: 33, target: V3(0, 7, 0) } },
+  'Prone Y-raise': { pose: proneYPose, gear: matGear, period: 4.5, view: { theta: -0.5, phi: 1.1, dist: 30, target: V3(-1, 2, 0) } },
+  'Standing cable high row': { pose: highRowPose, gear: highRowGear, period: 4.5, view: { theta: 0.9, phi: 1.3, dist: 33, target: V3(0, 11, 2.5) } },
+  'Back extension': { pose: backExtensionPose, gear: backExtensionGear, period: 5, view: { theta: 1.3, phi: 1.4, dist: 36, target: V3(0, 7, 2.5) } },
+  'Landmine press': { pose: landminePose, gear: landmineGear, period: 4.5, view: { theta: 1.0, phi: 1.3, dist: 38, target: V3(0, 10, 4) } },
   'Couch stretch': { pose: couchPose, gear: couchGear, period: 6, side: 1, /* right (rear) leg stretched */ view: { theta: 1.25, phi: 1.3, dist: 30, target: V3(0, 6, 0.5) } },
 };
 for (const [name, def] of Object.entries(MOTIONS)) def.name = name;
@@ -2013,6 +2024,123 @@ function cableCrunchPose(u) {
   };
 }
 
+// ---------- batch 5: shoulder blades and upper back ----------
+// barbell shrug: bar hanging in front of the thighs, straight arms; the shoulders rise towards the ears
+function shrugPose(u) {
+  const root = STANDING(), L = rig.sides[0], z = L.S.z + 0.9;
+  return { root, scap: both({ elev: lerp(-0.05, 0.45, u) }), arms: barArms(hangY(root, L, 2.3, z) + 0.62 * u, z), legs: [STAND, STAND] };
+}
+// push-up plus / scapular push-up: push-up top position with straight arms; the chest sinks between the shoulder
+// blades (squeezed together), then pushes away from the floor (blades rounded forwards round the ribs)
+function scapPushPose(u, range) {
+  const P = pushupPose(0);
+  P.root.p.y += lerp(-0.3, 0.3, u) * range;
+  P.scap = both({ prot: lerp(-0.2, 0.32, u) * range });
+  return P;
+}
+function pushUpPlusPose(u) { return scapPushPose(u, 1); }
+function scapularPushUpPose(u) { return scapPushPose(u, 0.85); }
+
+// wall slides: back against a wall, arms in a goal-post shape on the wall, sliding up into a Y
+const WALL_Z = () => rig.zBack - 0.15;
+function wallSlidePose(u) {
+  const root = STANDING();
+  return {
+    root, scap: both({ prot: -0.1 }),
+    arms: rig.sides.map(s => {
+      const lo = s.S.clone().add(V3(s.sg * s.L1 * 0.95, s.L2 * 0.85, 0)), hi = s.S.clone().add(V3(s.sg * 0.45, 0.89, 0).multiplyScalar(rig.reach * 0.93));
+      const to = vlerp(lo, hi, u).setZ(WALL_Z() + 0.45);
+      return armTo(to, V3(s.sg, -0.4, -0.3), V3(0, 0, 1), { point: 'wrist', fingers: V3(-s.sg * 0.2 * u, 1, 0).normalize(), curl: RELAX });
+    }),
+    legs: rig.sides.map(s => footFlat(V3(s.sg * 1.0, s.A.y, 1.6))),
+  };
+}
+
+// cable serratus punch (right arm): cable from behind at shoulder height; the straight arm reaches further forwards
+// by sliding the shoulder blade round the ribs
+function serratusPunchPose(u) {
+  const root = STANDING(), [l, r] = rig.sides;
+  const to = r.S.clone().add(V3(0.3, -0.2, rig.gripReach * 0.92 + 0.55 * u));
+  return {
+    root, scap: [{}, { prot: lerp(-0.15, 0.38, u) }],
+    arms: [hang(root, l, false), armTo(to, V3(-1, -0.5, 0), V3(1, 0, 0))],
+    legs: [footFlat(V3(0.9, l.A.y, 1.3)), footFlat(V3(-0.9, r.A.y, -1.3))],
+  };
+}
+
+// chest-supported row: chest on an incline bench (about 35°), dumbbells hang straight down and row up to the ribs
+const CSR = { ang: 0.62, chest: V3(-1.2, 8.8, 0) };
+function chestSupportedRowPose(u) {
+  const yc = rig.yChest - 0.6, root = rootAt(headUp(ON_FRONT, CSR.ang), V3(0, yc, rig.chestZAt(yc) + 0.1), CSR.chest);
+  return {
+    root, scap: both({ prot: lerp(0.18, -0.3, u) }), head: { flex: -0.15 },
+    arms: rig.sides.map(s => {
+      const S = toW(root, s.S), top = toW(root, V3(s.sg * 1.9, rig.yChest - 1.2, rig.zBack + 1.2));
+      const bot = V3(S.x, S.y - rig.gripReach * 0.95, S.z);
+      return armTo(vlerp(bot, V3(top.x + 0.4, top.y - 0.6, top.z), u), V3(1, 1, 0).normalize(), V3(0, 0, -Math.sign(S.z)));
+    }),
+    legs: rig.sides.map(s => { const H = toW(root, s.H); return footFlat(V3(H.x + 3.2, s.A.y, H.z * 1.3), V3(-0.5, 0, 0).add(V3(0, 0.2, 0)), V3(-1, 0, 0)); }),
+  };
+}
+
+// prone y-raise: face down on the mat, arms overhead in a Y with thumbs up; the arms lift off the floor
+function proneYPose(u) {
+  const root = rootAt(ON_FRONT, V3(0, rig.yChest, rig.chestZAt(rig.yChest) - 0.1), V3(0, 0.15, 0));
+  return {
+    root, head: { flex: -0.1 },
+    arms: rig.sides.map(s => {
+      const S = toW(root, s.S), zs = Math.sign(S.z);
+      const dir = V3(-0.9, lerp(-0.1, 0.32, u), zs * 0.48).normalize();
+      return armTo(S.clone().addScaledVector(dir, rig.reach * 0.95), V3(0, -1, 0), V3(0, -0.3, -zs).normalize(), { point: 'wrist', fingers: dir, curl: RELAX });
+    }),
+    legs: rig.sides.map(() => ({ fk: { ankle: 0.9 } })),
+  };
+}
+
+// standing cable high row: cable at chest height, rope pulled to the neck with the elbows up and out
+function highRowPose(u) {
+  const root = { q: qAxis(AXIS_X, -0.04), p: V3() };
+  return {
+    root, scap: both({ prot: lerp(0.15, -0.3, u) }),
+    arms: rig.sides.map(s => {
+      const S = toW(root, s.S);
+      const from = S.clone().add(V3(-s.sg * 0.9, -0.6, rig.gripReach * 0.9)), to = S.clone().add(V3(-s.sg * 0.7, 0.1, 1.5));
+      return armTo(vlerp(from, to, u), V3(s.sg, 0.1, -0.4).normalize(), V3(0, -1, 0));
+    }),
+    legs: [footFlat(V3(0.9, rig.sides[0].A.y, 1.0)), footFlat(V3(-0.9, rig.sides[1].A.y, -0.8))],
+  };
+}
+
+// back extension (45° bench): hips on the pad, heels under the roller; the trunk lowers with a rounded back,
+// then rises until the body is one straight line (no arching past it)
+const BX = { lean: 0.8, pad: V3(0, 8.2, 1.2) };
+function backExtensionPose(u) {
+  const h = midHips(), lean = lerp(1.6, BX.lean, u), spine = { flex: lerp(0.4, 0, u) };
+  const root = rootAt(qAxis(AXIS_X, lean), h, BX.pad);
+  const cq = root.q.clone().multiply(spineQ(spine, 1));
+  return {
+    root, spine,
+    // arms crossed on the chest
+    arms: rig.sides.map(s => armTo(chestW(root, spine, V3(-s.sg * 1.3, rig.yChest + 0.6, rig.chestZAt(rig.yChest) + 0.5)), V3(s.sg * 0.3, -1, 0.3).applyQuaternion(cq),
+      V3(0, 0, -1).applyQuaternion(cq), { point: 'palm', fingers: V3(-s.sg, 0.6, 0).applyQuaternion(cq), curl: RELAX })),
+    legs: rig.sides.map(() => ({ fk: { flex: lean - BX.lean, ankle: 0.1 } })),
+  };
+}
+
+// landmine press (both hands on the bar end): the bar's far end is in a floor pivot ahead; the hands press from the
+// chest up and forwards along the arc the bar allows
+const LM = { R: 20, pivot: null };
+function landminePose(u) {
+  const root = { q: qAxis(AXIS_X, 0.15), p: V3() }, pz = 1.9 + Math.sqrt(LM.R ** 2 - 13.3 ** 2);
+  const y = lerp(13.5, 16.3, u), z = pz - Math.sqrt(LM.R ** 2 - (y - 0.2) ** 2);
+  LM.pivot = V3(0, 0.2, pz);
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(V3(s.sg * 0.32, y, z), V3(s.sg * 0.5, -1, 0.2), V3(-s.sg, 0, 0))),
+    legs: [footFlat(V3(0.9, rig.sides[0].A.y, 1.6)), footFlat(V3(-0.9, rig.sides[1].A.y, -2.0))],
+  };
+}
+
 // ---------- equipment ----------
 // each gear(group) builds the exercise's equipment once and may return update(hands) for the moving parts.
 // hands = { grip: [left, right] grip points, lat: [left, right] sideways axes through the fists } (world)
@@ -2281,6 +2409,55 @@ function cableCrunchGear(g) {
   };
 }
 
+function wallGear(g) { box(g, 16, 22, 0.6, GEAR_MAT.fabric, 0, 11, WALL_Z() - 0.3); }
+function serratusGear(g) {
+  cableTower(g, -1.5, -7, rig.sides[1].S.y - 0.2);
+  const handle = new THREE.Group(); g.add(handle);
+  cylZ(handle, 0.13, 0.9, GEAR_MAT.steel, 0, 10);
+  const cable = rod(g, 0.06, GEAR_MAT.cable);
+  return h => { alongZ(handle, h.grip[1], h.lat[1]); cable.span(V3(-1.5, rig.sides[1].S.y - 0.2, -6.5), h.grip[1]); };
+}
+function chestRowGear(g) {
+  // incline pad under the chest, seat for the hips, frame
+  const dir = V3(-Math.cos(CSR.ang), Math.sin(CSR.ang), 0), nrm = V3(-Math.sin(CSR.ang), -Math.cos(CSR.ang), 0);
+  const c = CSR.chest.clone().addScaledVector(dir, -1.6).addScaledVector(nrm, 0.3);
+  box(g, 8.5, 0.5, 2.4, GEAR_MAT.pad, c.x, c.y, 0, -CSR.ang + Math.PI);
+  box(g, 0.4, c.y, 0.4, GEAR_MAT.frame, c.x, c.y / 2, 0);
+  box(g, 7, 0.25, 2.6, GEAR_MAT.frame, c.x + 1, 0.12, 0);
+  return dumbbellGear(g);
+}
+function backExtensionGear(g) {
+  // 45° frame: hip pad, heel roller and foot plate
+  const pad = box(g, 2.6, 0.6, 3.2, GEAR_MAT.pad, 0, 0, 0);
+  pad.position.copy(BX.pad).add(V3(0, -0.5, 0.45)); pad.rotation.x = -BX.lean;
+  const ankle = toW(rootAt(qAxis(AXIS_X, BX.lean), midHips(), BX.pad), rig.sides[0].A);
+  const roller = cylZ(g, 0.45, 4, GEAR_MAT.pad); roller.rotation.y = Math.PI / 2; roller.position.set(0, ankle.y + 0.55, ankle.z + 0.5);
+  box(g, 3.4, 0.3, 2.4, GEAR_MAT.frame, 0, ankle.y - 0.9, ankle.z - 0.2, 0).rotation.x = -BX.lean;
+  rod(g, 0.25, GEAR_MAT.frame).span(V3(0, 0, ankle.z - 1), pad.position);
+  rod(g, 0.25, GEAR_MAT.frame).span(V3(0, 0, ankle.z - 1), V3(0, ankle.y - 1, ankle.z - 0.2));
+}
+function landmineGear(g) {
+  // bar from the floor pivot to the hands, one plate near the hands
+  const shaft = rod(g, 0.15, GEAR_MAT.steel), plate = cylZ(new THREE.Group(), 1.6, 0.5, GEAR_MAT.plate, 0, 40).parent;
+  g.add(plate);
+  box(g, 1.2, 0.5, 1.2, GEAR_MAT.frame, 0, 0.25, 0).name = 'base';
+  return h => {
+    const hand = h.grip[0].clone().add(h.grip[1]).multiplyScalar(0.5), d = hand.clone().sub(LM.pivot).normalize();
+    g.getObjectByName('base').position.copy(LM.pivot).setY(0.25);
+    shaft.span(LM.pivot, hand.clone().addScaledVector(d, 1.0));
+    alongZ(plate, hand.clone().addScaledVector(d, -2.2), d);
+  };
+}
+function highRowGear(g) {
+  cableTower(g, 0, 9, 12.8);
+  const ropes = [rod(g, 0.12, GEAR_MAT.cable), rod(g, 0.12, GEAR_MAT.cable)], cable = rod(g, 0.06, GEAR_MAT.cable);
+  return h => {
+    const knot = h.grip[0].clone().add(h.grip[1]).multiplyScalar(0.5).add(V3(0, 0, 0.8));
+    ropes.forEach((r, j) => r.span(knot, h.grip[j]));
+    cable.span(V3(0, 12.8, 8.4), knot);
+  };
+}
+
 // ---------- putting the pose on the body ----------
 const GEARS = new Map();   // exercise name -> { group, update }
 function gearOf(def) {
@@ -2351,6 +2528,7 @@ window.mmTest = {
   // anatomical mesh names matching a pattern, with their bounding boxes (for rig landmarks)
   names: re => drawables.filter(m => new RegExp(re, 'i').test(m.userData.zname || '')).map(m => { const b = new THREE.Box3().setFromObject(m); return [m.userData.zname, ...[b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z].map(v => +v.toFixed(2))]; }),
   // where the hands ended up vs where the pose asked them to go (debugging poses)
+  nanBones: (name, u) => { solvePose(motionPose(MOTIONS[name], u, u * 0.5)); return rig.R.map((q, i) => isNaN(q.x) ? i : -1).filter(i => i >= 0); },
   hands: (name, u) => { const P = motionPose(MOTIONS[name], u, u * 0.5); const h = applyShown(); return { want: P.arms.map(a => a.to), got: h.grip }; },
   // cam (optional): { theta, phi } to look from another side than the exercise's own view
   show(name, u, cam) {
