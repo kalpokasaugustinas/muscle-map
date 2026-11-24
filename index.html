@@ -885,6 +885,17 @@ const MOTIONS = {
   'Lying leg curl': { pose: lyingLegCurlPose, gear: lyingLegCurlGear, period: 4.5, view: { theta: 0.5, phi: 1.3, dist: 34, target: V3(1, 5, 0) } },
   'Hip abduction machine': { pose: hipAbductionPose, gear: hipMachineGear(true), period: 4.5, view: { theta: 0.3, phi: 1.1, dist: 32, target: V3(0, 6.5, 1.5) } },
   'Hip adduction machine': { pose: hipAdductionPose, gear: hipMachineGear(false), period: 4.5, view: { theta: 0.3, phi: 1.1, dist: 32, target: V3(0, 6.5, 1.5) } },
+  // batch 4
+  'Hollow body hold': { pose: hollowPose, gear: matGear, period: 5, view: { theta: 0.35, phi: 1.25, dist: 30, target: V3(0.5, 2.5, 0) } },
+  'Bear plank': { pose: bearPlankPose, gear: matGear, period: 5, view: { theta: 0.55, phi: 1.25, dist: 30, target: V3(1.5, 3.5, 0) } },
+  'Mountain climbers': { pose: mountainClimberPose, gear: matGear, period: 2.4, view: { theta: 0.45, phi: 1.25, dist: 30, target: V3(0.5, 3, 0) } },
+  'Reverse crunch': { pose: reverseCrunchPose, gear: matGear, period: 4.5, view: { theta: 0.45, phi: 1.2, dist: 30, target: V3(3, 2.5, 0) } },
+  'McGill curl-up': { pose: mcgillPose, gear: matGear, period: 5, view: { theta: 0.4, phi: 1.2, dist: 30, target: V3(2, 2.5, 0) } },
+  'Hanging leg raise': { pose: hangingLegRaisePose, gear: pullUpBarGear, period: 5, view: { theta: 1.1, phi: 1.5, dist: 40, target: V3(0, 13, 0) } },
+  'Ab wheel rollout': { pose: abWheelPose, gear: abWheelGear, period: 5, view: { theta: 0.45, phi: 1.25, dist: 32, target: V3(1, 3.5, 0) } },
+  'Bicycle crunch': { pose: bicyclePose, gear: matGear, period: 3, view: { theta: 0.5, phi: 1.15, dist: 30, target: V3(3, 2.5, 0) } },
+  'Russian twist': { pose: russianTwistPose, gear: matGear, period: 3, view: { theta: 0.6, phi: 1.3, dist: 30, target: V3(0, 4, 2) } },
+  'Cable crunch': { pose: cableCrunchPose, gear: cableCrunchGear, period: 4.5, view: { theta: 1.2, phi: 1.4, dist: 34, target: V3(0, 7, 1) } },
   'Couch stretch': { pose: couchPose, gear: couchGear, period: 6, side: 1, /* right (rear) leg stretched */ view: { theta: 1.25, phi: 1.3, dist: 30, target: V3(0, 6, 0.5) } },
 };
 for (const [name, def] of Object.entries(MOTIONS)) def.name = name;
@@ -1765,6 +1776,124 @@ function hipSpreadPose(a) {
 function hipAbductionPose(u) { return hipSpreadPose(lerp(0.08, 0.62, u)); }
 function hipAdductionPose(u) { return hipSpreadPose(lerp(0.62, 0.08, u)); }
 
+// ---------- batch 4: core work on the floor and the bar ----------
+// arms lying on the floor beside the body, palms down (body on its back, root at rest)
+const floorArms = rest => rig.sides.map(s => {
+  const S = toW(rest, s.S);
+  return armTo(V3(S.x + 0.95 * rig.reach, 0.35, S.z * 1.25), V3(0, 1, 0), V3(0, -1, 0), { point: 'wrist', curl: RELAX });
+});
+
+// hollow body hold: on the back, shoulders and straight legs just off the floor, arms reaching past the head; small rock
+function hollowPose(u) {
+  const root = rootAt(headUp(ON_BACK, lerp(0.14, 0.18, u)), V3(0, 9.5, rig.zBack), V3(0, 0.15, 0));
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(toW(root, s.S).add(V3(-0.95, 0.25, 0).normalize().multiplyScalar(0.97 * rig.reach)), V3(0, 1, 0),
+      V3(0, 1, 0), { point: 'wrist', fingers: V3(-1, 0, 0), curl: RELAX })),
+    legs: rig.sides.map(() => ({ fk: { flex: lerp(0.42, 0.36, u), abd: -0.03, ankle: 0.5 } })),
+  };
+}
+
+// bear plank: on hands and toes, knees bent 90° and hovering just off the floor; the knees lift a little and hold
+function bearPlankPose(u) {
+  const hips = midHips(), L = rig.sides[0], kneeY = lerp(0.9, 1.4, u);
+  const hipW = V3(2.5, L.lt + kneeY, 0);
+  const rootFor = t => rootAt(headUp(ON_FRONT, t), hips, hipW);
+  const root = rootFor(solve1(t => toW(rootFor(t), L.S).y, 0.97 * rig.reach + 0.45, -0.5, 0.6));
+  return {
+    root,
+    arms: rig.sides.map(s => { const S = toW(root, s.S); return armTo(V3(S.x, 0.1, S.z + s.sg * 0.15), V3(1, 0, 0), V3(0, -1, 0), { point: 'palm', fingers: V3(-1, 0, 0), curl: FLAT }); }),
+    legs: rig.sides.map(s => {
+      const H = toW(root, s.H);
+      return { to: V3(H.x + s.ls * 0.93, 0.95, H.z), pole: V3(-0.3, -1, 0), toe: V3(0.3, -1, 0).normalize(), down: V3(1, 0, 0) };
+    }),
+  };
+}
+
+// mountain climbers: push-up top position, knees drive towards the chest one after the other
+function mountainClimberPose(u, ph) {
+  const top = pushupPose(0), [a, b] = alt(ph);
+  top.legs = [a, b].map(e => ({ fk: { flex: lerp(0, 1.15, e), knee: lerp(0, 1.9, e), ankle: lerp(0.3, 0.6, e) } }));
+  return top;
+}
+
+// reverse crunch: on the back, knees bent over the hips; the knees pull in to the chest and the hips curl off the floor
+function reverseCrunchPose(u) {
+  const L = rig.sides[0], pivot = V3(0, L.S.y - 1.2, rig.zBack);
+  const rest = rootAt(ON_BACK, pivot, V3(0, 0.2, 0)), root = rootAt(headUp(ON_BACK, -lerp(0, 0.22, u)), pivot, V3(0, 0.2, 0));
+  return { root, arms: floorArms(rest), legs: rig.sides.map(() => ({ fk: { flex: lerp(1.5, 2.3, u), knee: lerp(1.7, 2.0, u), ankle: 0.3 } })) };
+}
+
+// mcgill curl-up: on the back, right knee bent, hands under the lower back; head and shoulders lift a few centimetres
+function mcgillPose(u) {
+  const rest = rootAt(ON_BACK, V3(0, 9.0, rig.zBack), V3(0, 0.2, 0)), root = rootAt(headUp(ON_BACK, lerp(0, 0.1, u)), V3(0, 9.0, rig.zBack), V3(0, 0.2, 0));
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * 0.8, 9.6, rig.zBack - 0.2)), dirW(root, V3(s.sg, 0, 0.3)), V3(0, 1, 0),
+      { point: 'palm', fingers: dirW(root, V3(0, 1, 0)), curl: FLAT })),
+    legs: [{ fk: {} }, (() => { const H = toW(rest, rig.sides[1].H); return footFlat(V3(H.x + 5.0, rig.sides[1].A.y, H.z), V3(0, 1, 0), V3(1, 0, 0)); })()],
+  };
+}
+
+// hanging leg raise: dead hang from the bar, straight legs rise to hip height
+function hangingLegRaisePose(u) {
+  return hangPose(0, 3.2, V3(0, 0, 1), V3(1, -1, 0.15), rig.sides.map(() => ({ fk: { flex: lerp(0.08, 1.55, u), abd: -0.03, knee: 0.08, ankle: 0.3 } })));
+}
+
+// ab wheel rollout: kneeling, hands on the wheel under the shoulders; hips and wheel roll out until the body is long
+const KNEE_W = V3(4.2, 0.5, 0);
+function abWheelPose(u) {
+  const hips = midHips(), L = rig.sides[0], R = rig.gripReach * 0.96, wheelY = 0.7;
+  const al = lerp(0.2, 1.15, u), arm = lerp(0.1, 1.25, u);   // thigh angle from vertical, arm angle from vertical
+  const hipW = KNEE_W.clone().add(V3(-Math.sin(al), Math.cos(al), 0).multiplyScalar(L.lt));
+  const rootFor = t => rootAt(headUp(ON_FRONT, t), hips, hipW);
+  const root = rootFor(solve1(t => toW(rootFor(t), L.S).y, wheelY + R * Math.cos(arm), -0.6, 1.4));
+  return {
+    root,
+    arms: rig.sides.map(s => { const S = toW(root, s.S); return armTo(V3(S.x - R * Math.sin(arm), wheelY, Math.sign(S.z) * 0.75), V3(1, 0.3, 0), V3(0, 0, -Math.sign(S.z))); }),
+    legs: rig.sides.map(s => { const H = toW(root, s.H); return { to: V3(KNEE_W.x + s.ls * 0.97, 0.5, H.z), pole: V3(0, -1, 0), toe: V3(1, -0.15, 0).normalize(), down: V3(0, 1, 0) }; }),
+  };
+}
+
+// bicycle crunch: shoulders off the floor, hands behind the head; one knee comes in while the other leg reaches out,
+// and the trunk turns towards the bent knee
+function bicyclePose(u, ph) {
+  const [a, b] = alt(ph);
+  const q = headUp(ON_BACK, 0.3).multiply(qAxis(AXIS_Y, 0.3 * (b - a)));
+  const root = rootAt(q, V3(0, 9.3, rig.zBack), V3(0, 0.25, 0));
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * 0.45, 16.0, rig.zBack + 0.5)), dirW(root, V3(s.sg, 0.2, 0.3)), dirW(root, V3(0, 0, 1)),
+      { point: 'palm', fingers: dirW(root, V3(-s.sg, 0.3, 0)), curl: RELAX })),
+    legs: rig.sides.map((s, j) => { const e = j === 0 ? a : b; return { fk: { flex: lerp(0.45, 1.75, e), knee: lerp(0.08, 1.9, e), ankle: 0.4 } }; }),
+  };
+}
+
+// russian twist: sitting on the floor leaning back, feet up, hands together; the trunk turns side to side
+function russianTwistPose(u, ph) {
+  const turn = Math.sin(2 * Math.PI * ph) * 0.45, hips = midHips();
+  const q = qAxis(AXIS_Y, turn).multiply(qAxis(AXIS_X, -0.75));
+  const root = rootAt(q, hips, V3(0, 1.3, 0));
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * 0.35, rig.yChest - 0.5, rig.chestZAt(rig.yChest) + 3.6)), dirW(root, V3(s.sg, -0.6, 0)),
+      dirW(root, V3(-s.sg, 0, 0)), { point: 'palm', curl: RELAX })),
+    legs: rig.sides.map(() => ({ fk: { flex: 2.0, knee: 1.5, ankle: 0.3 } })),
+  };
+}
+
+// cable crunch: kneeling below a high pulley, rope by the sides of the head; the trunk curls down towards the floor
+function cableCrunchPose(u) {
+  const hips = midHips(), L = rig.sides[0];
+  const root = rootAt(qAxis(AXIS_X, lerp(0.35, 1.15, u)), hips, V3(0, L.lt + 0.5, 0));
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * 0.95, 15.9, 1.2)), dirW(root, V3(s.sg * 0.4, -1, 0.6)), dirW(root, V3(-s.sg, 0, 0)),
+      { fingers: dirW(root, V3(0, 1, 0)) })),
+    legs: rig.sides.map(s => ({ to: V3(s.sg * 1.0, 0.55, -L.ls * 0.97), pole: V3(0, -0.4, 1), toe: V3(0, -0.2, -1).normalize(), down: V3(0, 1, 0) })),
+  };
+}
+
 // ---------- equipment ----------
 // each gear(group) builds the exercise's equipment once and may return update(hands) for the moving parts.
 // hands = { grip: [left, right] grip points, lat: [left, right] sideways axes through the fists } (world)
@@ -2012,6 +2141,24 @@ function hipMachineGear(outside) {
       pads[j].position.copy(K).addScaledVector(side, 0.85).add(V3(0, 0, 0));
       pads[j].rotation.y = Math.atan2(d.x, d.z);
     });
+  };
+}
+
+function abWheelGear(g) {
+  matGear(g);
+  // wheel between the hands, axle across
+  const w = new THREE.Group(); g.add(w);
+  cylZ(w, 0.7, 0.9, GEAR_MAT.plate, 0, 32); cylZ(w, 0.1, 2.4, GEAR_MAT.steel, 0, 10);
+  return h => barBetween(w, h);
+}
+function cableCrunchGear(g) {
+  matGear(g);
+  cableTower(g, 0, 10, 19);   // far enough in front for the head at the bottom of the crunch
+  const ropes = [rod(g, 0.12, GEAR_MAT.cable), rod(g, 0.12, GEAR_MAT.cable)], cable = rod(g, 0.06, GEAR_MAT.cable);
+  return h => {
+    const knot = h.grip[0].clone().add(h.grip[1]).multiplyScalar(0.5).add(V3(0, 1.0, 0.6));
+    ropes.forEach((r, j) => r.span(knot, h.grip[j]));
+    cable.span(V3(0, 19, 9.5), knot);
   };
 }
 
