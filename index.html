@@ -874,6 +874,17 @@ const MOTIONS = {
   'Triceps pushdown': { pose: pushdownPose, gear: pushdownGear, period: 4, view: { theta: 1.1, phi: 1.4, dist: 33, target: V3(0, 10.5, 1.5) } },
   'Overhead triceps extension': { pose: overheadExtensionPose, gear: gobletGear, period: 4.5, view: { theta: 1.0, phi: 1.42, dist: 34, target: V3(0, 12, 0) } },
   'Hip thrust': { pose: hipThrustPose, gear: hipThrustGear, period: 4.5, view: { theta: 0.5, phi: 1.25, dist: 32, target: V3(3, 3.5, 0) } },
+  // batch 3
+  'Pull-up': { pose: pullUpPose, gear: pullUpBarGear, period: 5, view: { theta: 0.7, phi: 1.5, dist: 40, target: V3(0, 15, 0) } },
+  'Chin-up': { pose: chinUpPose, gear: pullUpBarGear, period: 5, view: { theta: 0.7, phi: 1.5, dist: 40, target: V3(0, 15, 0) } },
+  'Assisted pull-up': { pose: assistedPullUpPose, gear: assistedGear, period: 5, view: { theta: 0.8, phi: 1.5, dist: 40, target: V3(0, 14, 0) } },
+  'Chest dip': { pose: dipPose, gear: dipGear, period: 5, view: { theta: 0.8, phi: 1.45, dist: 36, target: V3(0, 11, 0.5) } },
+  'Cable fly': { pose: cableFlyPose, gear: cableFlyGear, period: 5, view: { theta: 0.45, phi: 1.3, dist: 38, target: V3(0, 11, 0.5) } },
+  'Leg extension': { pose: legExtensionPose, gear: legExtensionGear, period: 4.5, view: { theta: 1.2, phi: 1.4, dist: 32, target: V3(0, 7, 2) } },
+  'Seated leg curl': { pose: seatedLegCurlPose, gear: seatedLegCurlGear, period: 4.5, view: { theta: 1.2, phi: 1.4, dist: 32, target: V3(0, 7, 2) } },
+  'Lying leg curl': { pose: lyingLegCurlPose, gear: lyingLegCurlGear, period: 4.5, view: { theta: 0.5, phi: 1.3, dist: 34, target: V3(1, 5, 0) } },
+  'Hip abduction machine': { pose: hipAbductionPose, gear: hipMachineGear(true), period: 4.5, view: { theta: 0.3, phi: 1.1, dist: 32, target: V3(0, 6.5, 1.5) } },
+  'Hip adduction machine': { pose: hipAdductionPose, gear: hipMachineGear(false), period: 4.5, view: { theta: 0.3, phi: 1.1, dist: 32, target: V3(0, 6.5, 1.5) } },
   'Couch stretch': { pose: couchPose, gear: couchGear, period: 6, side: 1, /* right (rear) leg stretched */ view: { theta: 1.25, phi: 1.3, dist: 30, target: V3(0, 6, 0.5) } },
 };
 for (const [name, def] of Object.entries(MOTIONS)) def.name = name;
@@ -1648,6 +1659,112 @@ function hipThrustPose(u) {
   };
 }
 
+// ---------- batch 3: hanging and bar work, cable fly, leg machines ----------
+// points a pose leaves for its equipment (pads that follow the shins, a platform under the knees...)
+const gearPts = {};
+
+// pull-up family: hands fixed on a high bar, the body rises from a dead hang until the chin is over the bar
+const PULL_BAR_Y = 22.5, PULL_BAR_Z = 0.4;
+function hangPose(u, gripX, palm, pole, legs) {
+  const L = rig.sides[0], r = rig.gripReach * 0.97;
+  const yHang = PULL_BAR_Y - Math.sqrt(r * r - (gripX - L.S.x) ** 2 - (PULL_BAR_Z - L.S.z) ** 2);
+  const dy = lerp(yHang, PULL_BAR_Y - 2.4, u) - L.S.y;
+  const root = { q: qAxis(AXIS_X, -0.06), p: V3(0, dy, 0) };
+  return { root, arms: rig.sides.map(s => armTo(V3(s.sg * gripX, PULL_BAR_Y, PULL_BAR_Z), V3(s.sg * pole.x, pole.y, pole.z), palm)), legs };
+}
+// knees bent so the feet stay clear of the floor
+const HANG_LEGS = [{ fk: { flex: 0.25, knee: 1.0, ankle: 0.4 } }, { fk: { flex: 0.2, knee: 1.1, ankle: 0.4 } }];
+function pullUpPose(u) { return hangPose(u, 3.4, V3(0, 0, 1), V3(1, -1, 0.15), HANG_LEGS); }
+// chin-up: shoulder-width underhand grip, elbows come down in front
+function chinUpPose(u) { return hangPose(u, 1.9, V3(0, 0, -1), V3(0.35, -1, 0.6), HANG_LEGS); }
+// assisted pull-up: kneeling on the machine's pad, which rises with the body
+function assistedPullUpPose(u) {
+  const P = hangPose(u, 3.0, V3(0, 0, 1), V3(1, -1, 0.15), rig.sides.map(() => ({ fk: { knee: 1.55, ankle: 0.5 } })));
+  const L = rig.sides[0];
+  gearPts.kneePad = toW(P.root, V3(0, L.Kn.y - 0.55, L.Kn.z - L.ls * 0.45));   // under the shins, just below the knees
+  return P;
+}
+
+// chest dip: hands on parallel bars, body leans forwards and sinks until the upper arms are about level
+const DIP_Y = 12;
+function dipPose(u) {
+  const L = rig.sides[0], lean = lerp(0.12, 0.35, u);
+  const top = DIP_Y + rig.reach * 0.95 - L.S.y;
+  const root = rootAt(qAxis(AXIS_X, lean), L.S.clone().setX(0), V3(0, L.S.y + lerp(top, top - 2.9, u), lerp(0, 0.6, u)));
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(V3(s.sg * 2.7, DIP_Y, 0.4), V3(s.sg * 0.35, 0, -1), V3(s.sg * 0.15, -1, 0).normalize(),
+      { point: 'palm', fingers: V3(0, 0, 1), curl: GRIP })),
+    legs: [{ fk: { flex: 0.1, knee: 1.3, ankle: 0.5 } }, { fk: { flex: 0.15, knee: 1.4, ankle: 0.5 } }],
+  };
+}
+
+// cable fly: standing between two pulleys at shoulder height, arms sweep in an arc from the sides to meet in front
+function cableFlyPose(u) {
+  const root = { q: qAxis(AXIS_X, 0.15), p: V3() }, a = lerp(0.15, 1.4, u);
+  return {
+    root,
+    arms: rig.sides.map(s => armTo(toW(root, s.S).add(V3(s.sg * Math.cos(a), -0.12, Math.sin(a)).normalize().multiplyScalar(rig.gripReach * 0.92)),
+      V3(0, 0.4, -1), V3(-s.sg * Math.sin(a), 0, Math.cos(a)))),
+    legs: [footFlat(V3(0.9, rig.sides[0].A.y, 1.2)), footFlat(V3(-0.9, rig.sides[1].A.y, -1.3))],
+  };
+}
+
+// seated leg machines: upright seat, hands on the side handles; legs by joint angles
+const seatHandles = () => rig.sides.map(s => armTo(V3(s.sg * 2.8, PRESS_SEAT_Y + 0.4, 0.8), V3(s.sg * 0.3, 0, -1), V3(-s.sg, 0, 0)));
+// ankle of a seated leg (upright root) with hip flexion f and knee flexion k, world
+function seatedAnkle(root, s, f, k) {
+  return toW(root, s.H).addScaledVector(V3(0, -Math.cos(f), Math.sin(f)), s.lt).addScaledVector(V3(0, -Math.cos(f - k), Math.sin(f - k)), s.ls);
+}
+// shin pad: just past the lower shin, on the side given by the shin's normal (front +1 / back -1)
+function shinPad(root, f, k, side) {
+  const A = seatedAnkle(root, rig.sides[0], f, k).setX(0), sh = V3(0, -Math.cos(f - k), Math.sin(f - k));
+  const n = V3(0, sh.z, -sh.y).multiplyScalar(side);   // shin turned 90° (towards the front of the shin for side = 1)
+  return A.addScaledVector(sh, -0.7).addScaledVector(n, 0.75);
+}
+// leg extension: knees straighten from 90° against a pad on the front of the ankles
+function legExtensionPose(u) {
+  const root = seatedRoot(), k = lerp(1.55, 0.08, u), f = 1.45;
+  gearPts.shinPad = shinPad(root, f, k, 1);   // front of the shins
+  return { root, arms: seatHandles(), legs: rig.sides.map(() => ({ fk: { flex: f, knee: k, ankle: 0.1 } })) };
+}
+// seated leg curl: legs out straight over a pad, heels pulled down and back under the seat
+function seatedLegCurlPose(u) {
+  const root = seatedRoot(), k = lerp(0.1, 1.65, u), f = 1.45;
+  gearPts.shinPad = shinPad(root, f, k, -1);   // behind the heels
+  return { root, arms: seatHandles(), legs: rig.sides.map(() => ({ fk: { flex: f, knee: k, ankle: 0.1 } })) };
+}
+// lying leg curl: face down on the bench, knees just past its end, heels curl up towards the glutes
+const CURL_BENCH_Y = 4.6;
+function lyingLegCurlPose(u) {
+  const h = midHips(), root = rootAt(ON_FRONT, V3(0, h.y, 1.45), V3(1.5, CURL_BENCH_Y, 0)), k = lerp(0.1, 1.85, u);
+  const L = rig.sides[0], Kw = toW(root, L.Kn).setZ(0);
+  // shin direction in world: along +x (towards the feet) when straight, turning up as the knee bends
+  const sh = V3(Math.cos(k), Math.sin(k), 0), up = V3(-Math.sin(k), Math.cos(k), 0);
+  gearPts.shinPad = Kw.addScaledVector(sh, L.ls * 0.85).addScaledVector(up, 0.75);
+  return {
+    root,
+    arms: rig.sides.map(s => { const S = toW(root, s.S); return armTo(V3(S.x - 1.6, CURL_BENCH_Y - 0.9, S.z * 1.5), V3(0, 1, 0), V3(0, 0, -Math.sign(S.z))); }),
+    legs: rig.sides.map(() => ({ fk: { knee: k, ankle: 0.3 } })),
+  };
+}
+// hip abduction / adduction machine: seated, knees bent, thighs swing apart against pads on the outside / inside of the knees
+function hipSpreadPose(a) {
+  const root = seatedRoot();
+  gearPts.knees = [];
+  return {
+    root,
+    arms: seatHandles(),
+    legs: rig.sides.map(s => {
+      const H = toW(root, s.H), d = V3(s.sg * Math.sin(a), 0, Math.cos(a)), K = H.clone().addScaledVector(d, s.lt);
+      gearPts.knees.push({ K, d, sg: s.sg });
+      return footFlat(K.clone().add(V3(0, -s.ls * 0.99, 0.15)), d.clone().add(V3(0, 0.4, 0)).normalize(), d);
+    }),
+  };
+}
+function hipAbductionPose(u) { return hipSpreadPose(lerp(0.08, 0.62, u)); }
+function hipAdductionPose(u) { return hipSpreadPose(lerp(0.62, 0.08, u)); }
+
 // ---------- equipment ----------
 // each gear(group) builds the exercise's equipment once and may return update(hands) for the moving parts.
 // hands = { grip: [left, right] grip points, lat: [left, right] sideways axes through the fists } (world)
@@ -1835,6 +1952,69 @@ function hipThrustGear(g) {
   box(g, 12, 0.12, 7, GEAR_MAT.mat, 6, 0.06, 0);
 }
 
+function pullUpBarGear(g) {
+  // two posts and a fixed bar overhead
+  for (const sg of [1, -1]) {
+    box(g, 0.8, PULL_BAR_Y + 0.5, 0.8, GEAR_MAT.frame, sg * 6, (PULL_BAR_Y + 0.5) / 2, PULL_BAR_Z - 1.4);
+    box(g, 0.6, 0.6, 1.6, GEAR_MAT.frame, sg * 6, PULL_BAR_Y, PULL_BAR_Z - 0.6);
+  }
+  const bar = cylZ(g, 0.15, 12.5, GEAR_MAT.steel); bar.rotation.y = Math.PI / 2; bar.position.set(0, PULL_BAR_Y, PULL_BAR_Z);
+}
+function assistedGear(g) {
+  pullUpBarGear(g);
+  const pad = box(g, 3.6, 0.5, 2.6, GEAR_MAT.pad, 0, 0, 0), arm = rod(g, 0.25, GEAR_MAT.frame);
+  return () => { pad.position.copy(gearPts.kneePad); arm.span(V3(0, 0, gearPts.kneePad.z - 3), pad.position); };
+}
+function dipGear(g) {
+  // parallel bars along the body, posts at both ends
+  for (const sg of [1, -1]) {
+    const bar = cylZ(g, 0.2, 7, GEAR_MAT.steel); bar.position.set(sg * 2.7, DIP_Y - 0.2, 0.4);
+    for (const z of [-2.6, 3.4]) box(g, 0.5, DIP_Y - 0.2, 0.5, GEAR_MAT.frame, sg * 2.7, (DIP_Y - 0.2) / 2, z);
+  }
+}
+function cableFlyGear(g) {
+  const cables = [1, -1].map(sg => { cableTower(g, sg * 9.5, -0.3, 13.5); return rod(g, 0.06, GEAR_MAT.cable); });
+  const grips = [0, 1].map(() => { const x = new THREE.Group(); g.add(x); cylZ(x, 0.13, 0.9, GEAR_MAT.steel, 0, 10); return x; });
+  return h => [0, 1].forEach(j => { alongZ(grips[j], h.grip[j], h.lat[j]); cables[j].span(V3((j ? -1 : 1) * 9.0, 13.5, -0.3), h.grip[j]); });
+}
+// leg machine: seat and back pad (the body sits like on the upright bench), side handles, optional moving shin pad
+function legMachine(g, withPad) {
+  const back = rig.zBack - midHips().z;
+  box(g, 3.6, 0.6, 4.4, GEAR_MAT.pad, 0, PRESS_SEAT_Y - 1.15, back + 2.4);
+  box(g, 3.6, 7, 0.6, GEAR_MAT.pad, 0, PRESS_SEAT_Y + 3.0, back - 0.35);
+  box(g, 1.0, PRESS_SEAT_Y - 1.4, 2.5, GEAR_MAT.frame, 0, (PRESS_SEAT_Y - 1.4) / 2, back + 2.4);
+  for (const sg of [1, -1]) box(g, 0.3, 0.3, 1.4, GEAR_MAT.steel, sg * 2.8, PRESS_SEAT_Y + 0.4, 0.8);   // side handles
+  if (!withPad) return null;
+  const pad = cylZ(g, 0.5, 4.2, GEAR_MAT.pad); pad.rotation.y = Math.PI / 2;
+  return () => pad.position.copy(gearPts.shinPad);
+}
+function legExtensionGear(g) { return legMachine(g, true); }
+function seatedLegCurlGear(g) {
+  const upd = legMachine(g, true);
+  const thighPad = cylZ(g, 0.5, 4.2, GEAR_MAT.pad); thighPad.rotation.y = Math.PI / 2;
+  thighPad.position.set(0, PRESS_SEAT_Y + 1.5, 3.4);   // holds the thighs down
+  return upd;
+}
+function lyingLegCurlGear(g) {
+  box(g, 15, 0.6, 2.8, GEAR_MAT.pad, -6.0, CURL_BENCH_Y - 0.3, 0);
+  for (const x of [-11.5, 0.5]) box(g, 0.5, CURL_BENCH_Y - 0.6, 0.5, GEAR_MAT.frame, x, (CURL_BENCH_Y - 0.6) / 2, 0);
+  for (const sg of [1, -1]) box(g, 0.3, 0.3, 1.2, GEAR_MAT.steel, -10.5, CURL_BENCH_Y - 0.9, sg * 2.3);   // handles
+  const pad = cylZ(g, 0.5, 4.2, GEAR_MAT.pad);   // across the legs (along z)
+  return () => pad.position.copy(gearPts.shinPad);
+}
+// hip abduction (pads outside the knees) or adduction (pads inside)
+function hipMachineGear(outside) {
+  return g => {
+    legMachine(g, false);
+    const pads = [0, 1].map(() => box(g, 0.4, 1.8, 2.0, GEAR_MAT.pad, 0, 0, 0));
+    return () => gearPts.knees.forEach(({ K, d, sg }, j) => {
+      const side = V3(d.z * sg, 0, -d.x * sg).multiplyScalar(outside ? 1 : -1);   // outwards from the knee, sideways to the thigh
+      pads[j].position.copy(K).addScaledVector(side, 0.85).add(V3(0, 0, 0));
+      pads[j].rotation.y = Math.atan2(d.x, d.z);
+    });
+  };
+}
+
 // ---------- putting the pose on the body ----------
 const GEARS = new Map();   // exercise name -> { group, update }
 function gearOf(def) {
@@ -1949,8 +2129,9 @@ function updateMotion(dt) {
   gear.visible = !!motion.def && b > 0.92;
   if (motion.def) {
     // slow, even rep: starts at u = 0, reaches u = 1 half way through the period
-    // (test hook: motionFreeze holds the pose at u = motionFreeze, used for start / end screenshots)
-    const ph = motionFreeze !== null ? motionFreeze * 0.5 : (motion.t / motion.def.period) % 1;
+    // (test hook: motionFreeze holds the pose at u = motionFreeze, used for start / end screenshots;
+    // ph = u / 4 so alternating exercises show their first side fully out at u = 1)
+    const ph = motionFreeze !== null ? motionFreeze * 0.25 : (motion.t / motion.def.period) % 1;
     solvePose(motion.def.pose(motionFreeze !== null ? motionFreeze : 0.5 - 0.5 * Math.cos(2 * Math.PI * ph), ph));
     gearOf(motion.def);
   }
