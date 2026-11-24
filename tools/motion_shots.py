@@ -8,7 +8,9 @@ from playwright.sync_api import sync_playwright
 
 root = Path(__file__).resolve().parent.parent
 out = Path(sys.argv[1]) if len(sys.argv) > 1 else root / 'shots'
-names = sys.argv[2:]
+# optional --back: look from behind (to check the shoulder blades)
+back = '--back' in sys.argv
+names = [a for a in sys.argv[2:] if a != '--back']
 out.mkdir(parents=True, exist_ok=True)
 
 
@@ -31,7 +33,7 @@ with sync_playwright() as p:
         pair = []
         for u in (0, 1):
             # the hook poses the body, renders and returns the canvas as a png data url
-            data = page.evaluate('([n, u]) => mmTest.show(n, u)', [name, u])
+            data = page.evaluate('([n, u, c]) => mmTest.show(n, u, c)', [name, u, {'theta': 3.14, 'phi': 1.4} if back else None])
             f = out / f'{safe(name)}_{u}.png'
             f.write_bytes(base64.b64decode(data.split(',', 1)[1]))
             pair.append(f)

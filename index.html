@@ -750,7 +750,7 @@ function renderMotionThumb(ex, u) {
   const keep = snapshot(), keepR = rig.R.map(q => q.clone()), keepRoot = { q: rig.root.q.clone(), p: rig.root.p.clone() };
   const keepGear = gear.visible, keepVis = [...GEARS.values()].map(g => g.group.visible), keepFloor = floor.scale.x;
   // pose the body (ph: alternating exercises show their first side) and the equipment
-  solvePose(def.pose(u, u * 0.5));
+  solvePose(motionPose(def, u, u * 0.5));
   blendShown(keep, 1, false);
   const hands = applyShown(), g = gearOf(def);
   if (g.update) g.update(hands);
@@ -899,6 +899,41 @@ const MOTIONS = {
   'Couch stretch': { pose: couchPose, gear: couchGear, period: 6, side: 1, /* right (rear) leg stretched */ view: { theta: 1.25, phi: 1.3, dist: 30, target: V3(0, 6, 0.5) } },
 };
 for (const [name, def] of Object.entries(MOTIONS)) def.name = name;
+// a motion's pose plus its adj(u, ph): extra shoulder girdle / spine / head movement on top of the pose
+function motionPose(def, u, ph) {
+  const P = def.pose(u, ph);
+  if (def.adj) Object.assign(P, def.adj(u, ph));
+  return P;
+}
+// same girdle movement on both sides
+const both = o => [o, o];
+// girdle extras per exercise: prot < 0 squeezes the shoulder blades together, > 0 rounds them forwards;
+// elev < 0 pulls them down, > 0 shrugs. raising the arm already turns them up by itself (see solvePose).
+const GIRDLE = {
+  'Barbell bench press': u => ({ scap: both({ prot: -0.15 }) }),
+  'Incline barbell bench press': u => ({ scap: both({ prot: -0.15 }) }),
+  'Close-grip bench press': u => ({ scap: both({ prot: -0.15 }) }),
+  'Incline dumbbell press': u => ({ scap: both({ prot: -0.15 }) }),
+  'Push-up': u => ({ scap: both({ prot: lerp(0.1, -0.18, u) }) }),
+  'Lat pulldown': u => ({ scap: both({ elev: lerp(0.05, -0.28, u), prot: lerp(0, -0.15, u) }) }),
+  'Pull-up': u => ({ scap: both({ elev: lerp(0.05, -0.3, u), prot: lerp(0.05, -0.15, u) }) }),
+  'Chin-up': u => ({ scap: both({ elev: lerp(0.05, -0.3, u), prot: lerp(0.05, -0.1, u) }) }),
+  'Assisted pull-up': u => ({ scap: both({ elev: lerp(0.05, -0.3, u), prot: lerp(0.05, -0.15, u) }) }),
+  'Seated cable row': u => ({ scap: both({ prot: lerp(0.2, -0.25, u) }) }),
+  'Barbell row': u => ({ scap: both({ prot: lerp(0.15, -0.25, u) }) }),
+  'Face pull': u => ({ scap: both({ prot: lerp(0.15, -0.3, u) }) }),
+  'Reverse fly': u => ({ scap: both({ prot: lerp(0.1, -0.3, u) }) }),
+  'Cable fly': u => ({ scap: both({ prot: lerp(-0.15, 0.15, u) }) }),
+  'Chest dip': u => ({ scap: both({ elev: lerp(-0.12, 0.12, u), prot: lerp(0, -0.08, u) }) }),
+  'Romanian deadlift': u => ({ scap: both({ prot: -0.1 }) }),
+  'Deadlift': u => ({ scap: both({ prot: -0.1 }) }),
+  'Back squat': u => ({ scap: both({ prot: -0.25 }) }),
+  'Hanging leg raise': u => ({ scap: both({ elev: -0.1 }) }),
+  'Plank': u => ({ scap: both({ prot: 0.1 }) }),
+  'RKC plank': u => ({ scap: both({ prot: 0.12 }) }),
+  'Side plank': u => ({ scap: [{}, { prot: 0.1, elev: -0.1 }] }),
+};
+for (const [name, adj] of Object.entries(GIRDLE)) if (MOTIONS[name]) MOTIONS[name].adj = adj;
 const motionOf = ex => (ex && MOTIONS[ex.name]) || null;
 
 const TARGET_REST = TARGET.clone();
@@ -920,10 +955,28 @@ const gearIdMat = idColor(253, 0, 0);
 // bone slots: 0 = trunk (the whole body), then 9 per side (j = 0 left / +x, j = 1 right / -x)
 const UPPER = 0, FORE = 1, TWIST = 2, HAND = 3, FING1 = 4, FING2 = 5, THIGH = 6, SHIN = 7, FOOT = 8;
 const boneIx = (j, k) => 1 + j * 9 + k;
+// after the limbs: lower back (lumbar), upper back (thoracic), head + neck, and per side the shoulder girdle
+// (clavicle + shoulder blade as one piece turning about the sternoclavicular joint). bone 0 is now the pelvis.
+const SPINE1 = 19, SPINE2 = 20, HEADB = 21, scapIx = j => 22 + j;
 const BONE_PARENT = [-1];
 for (let j = 0; j < 2; j++) {
   const b = k => boneIx(j, k);
-  BONE_PARENT.push(0, b(UPPER), b(FORE), b(TWIST), b(HAND), b(FING1), 0, b(THIGH), b(SHIN));
+  BONE_PARENT.push(scapIx(j), b(UPPER), b(FORE), b(TWIST), b(HAND), b(FING1), 0, b(THIGH), b(SHIN));
+}
+BONE_PARENT.push(0, SPINE1, SPINE2, SPINE2, SPINE2);
+// bones ordered so every parent comes before its children (the upper arms now hang off the girdle bones)
+const BONE_ORDER = [];
+(function order(par) { BONE_PARENT.forEach((pp, i) => { if (pp === par) { BONE_ORDER.push(i); order(i); } }); })(-1);
+// share of a girdle mesh's vertex that moves with the shoulder girdle (the rest moves with the spine).
+// thresholds are in model units (see the vertebra / scapula boxes of the anatomy model)
+function girdleShare(name) {
+  if (/^(clavicle|scapula)\./i.test(name)) return () => 1;
+  if (/rhomboid|transverse part of trapezius|descending part of trapezius/i.test(name)) return p => sstep(0.15, 0.95, Math.abs(p.x));   // spine end stays
+  if (/ascending part of trapezius/i.test(name)) return p => sstep(0.35, 1.25, Math.abs(p.x)) * sstep(16.0, 15.0, p.y);   // upper traps: neck end stays
+  if (/levator scapulae/i.test(name)) return p => sstep(15.9, 14.8, p.y);
+  if (/serratus anterior/i.test(name)) return p => sstep(0.3, -0.8, p.z);   // the part along the shoulder blade
+  if (/pectoralis minor|subclavius|omohyoid/i.test(name)) return () => 0.5;
+  return null;
 }
 
 // mesh groups for the skin weights (anatomical names from the model)
@@ -1042,6 +1095,19 @@ function buildRig() {
   const skeleton = new THREE.Skeleton(bones, bones.map(() => new THREE.Matrix4()));
   const pivot = [V3()];
   for (const s of sides) pivot.push(s.S, s.E, s.E, s.W, s.K, s.J, s.H, s.Kn, s.A);
+  // spine pivots: middle of the vertebral body of L3 (lower back bend), T9 (upper back) and C6 (neck / head)
+  const vert = n => {
+    const ps = pointsOf(new RegExp(`^Vertebra ${n}$`, 'i')), ys = ps.map(q => q.y), zs = ps.map(q => q.z);
+    return V3(0, (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...zs) - 0.25);
+  };
+  const pL = vert('L3'), pT = vert('T9'), pN = vert('C6');
+  const spine = { yL: pL.y, yT: pT.y, yN: pN.y };
+  // girdle pivot: the inner end of each clavicle
+  const scPiv = ['l', 'r'].map(sfx => {
+    const ps = pointsOf(new RegExp(`^Clavicle\\.${sfx}$`, 'i')), mn = Math.min(...ps.map(q => Math.abs(q.x)));
+    return mean(ps.filter(q => Math.abs(q.x) < mn + 0.15));
+  });
+  pivot.push(pL, pT, pN, scPiv[0], scPiv[1]);
   const boneMatSk = boneMat.clone(), tendonMatSk = tendonMat.clone();   // skinned meshes get their own copies
   const geoUsers = new Map();
   for (const m of drawables) geoUsers.set(m.geometry, (geoUsers.get(m.geometry) || 0) + 1);
@@ -1055,11 +1121,14 @@ function buildRig() {
     const box = new THREE.Box3().setFromObject(m);
     const cx = (box.min.x + box.max.x) / 2, cy = (box.min.y + box.max.y) / 2;
     const oneSide = box.min.x * box.max.x > 0, inner = Math.min(Math.abs(box.min.x), Math.abs(box.max.x));
-    const kind = m === headMesh || PELVIS_RE.test(name) ? 'trunk'
+    const kind = PELVIS_RE.test(name) ? 'trunk' : m === headMesh ? 'head'
       : ARM_RE.test(name) || (oneSide && inner > 1.85 && cy > 6) ? 'arm'
       : DELTOID_RE.test(name) ? 'deltoid' : SHOULDER_RE.test(name) ? 'shoulder' : CUFF_RE.test(name) ? 'cuff' : 'body';
     if (kind === 'trunk') continue;
     const armSide = cx > 0 ? 0 : 1, fingers = !THUMB_RE.test(name);
+    // girdle share: muscles from the shoulder blade / clavicle to the arm move fully with the girdle (what the arm leaves)
+    const gFn = girdleShare(name);
+    const gAll = kind === 'deltoid' || kind === 'cuff' || (kind === 'shoulder' && /teres major|clavicular head/i.test(name));
     const pos = m.geometry.attributes.position, n = pos.count;
     const idx = new Uint16Array(n * 4), wt = new Float32Array(n * 4), tot = new Float32Array(bones.length);
     let moves = false;
@@ -1097,8 +1166,20 @@ function buildRig() {
       // the trunk takes the rest; keep the 4 largest weights
       let sum = 0;
       for (let q = 0; q < wN; q++) sum += wVal[q];
-      if (sum > 0.002) moves = true;
-      add(0, 1 - sum);
+      // what the limbs leave: shoulder girdle, then pelvis / lower back / upper back / head by height
+      const rem = Math.max(0, 1 - sum);
+      if (kind === 'head') add(HEADB, rem);
+      else {
+        const sc = gAll ? 1 : gFn ? gFn(p) : 0, rest = rem * (1 - sc);
+        add(scapIx(p.x >= 0 ? 0 : 1), rem * sc);
+        const s1 = sstep(spine.yL - 0.85, spine.yL + 0.85, p.y), s2 = sstep(spine.yT - 1.0, spine.yT + 1.0, p.y);
+        const hd = sstep(spine.yN - 0.1, spine.yN + 0.7, p.y) * (1 - sstep(0.9, 1.5, Math.abs(p.x)));
+        add(0, rest * (1 - s1)); add(SPINE1, rest * s1 * (1 - s2));
+        add(SPINE2, rest * s1 * s2 * (1 - hd)); add(HEADB, rest * s1 * s2 * hd);
+      }
+      let pel = 0;
+      for (let q = 0; q < wN; q++) if (wIdx[q] === 0) pel += wVal[q];
+      if (pel < 0.998) moves = true;
       const keep = Math.min(4, wN);
       for (let a = 0; a < keep; a++) {
         let best = a;
@@ -1132,6 +1213,7 @@ function buildRig() {
   for (const [o, nm] of swaps) if (state.hidden.delete(o)) state.hidden.add(nm);
   layerCache.length = 0;   // held the old meshes; recomputed on demand
   // the smooth head was added to the scene; move it under the body so it moves with it
+  if (headMesh && swaps.has(headMesh)) headMesh = swaps.get(headMesh);
   if (headMesh) bodyModel.attach(headMesh);
   bodyModel.matrixAutoUpdate = false;
 
@@ -1163,12 +1245,27 @@ function posedRaycast(raycaster, intersects) {
 //   arm: { to: point, point: 'grip' | 'palm' | 'wrist' (what goes to `to`), pole: way the elbow points,
 //          palm: way the palm faces, fingers?: way the fingers point (default: straight on from the forearm), curl? }
 //   leg: { to: ankle point, pole: way the knee points, toe?, down?: way the toes point / the sole faces }  or  { fk: { flex, abd, knee, ankle } }
+//   spine?: { flex (forwards), side (to the left), twist (to the left) } radians, split between lower and upper back
+//   head?: { flex (nod down), turn (to the left) } on top of the upper back
+//   scap?: [left, right] { elev (shrug up, - = down), prot (forwards round the ribs, - = squeezed back) } on top of the
+//          automatic girdle movement (raising the arm turns the shoulder blade up, reaching forwards slides it forwards)
 function solvePose(P) {
   const qi = P.root.q.clone().invert();
   const toB = v => v.clone().sub(P.root.p).applyQuaternion(qi), dirB = v => v.clone().applyQuaternion(qi).normalize();
+  const R = rig.R, sp = P.spine || {}, hd = P.head || {};
+  R[SPINE1].copy(spineQ(sp, 0.5)); R[SPINE2].copy(spineQ(sp, 1));
+  R[HEADB].copy(R[SPINE2]).multiply(qAxis(AXIS_Y, hd.turn || 0)).multiply(qAxis(AXIS_X, hd.flex || 0));
+  const chestInv = R[SPINE2].clone().invert();
   rig.sides.forEach((s, j) => {
-    const a = P.arms[j], l = P.legs[j];
-    solveArm(s, j, toB(a.to), dirB(a.pole), dirB(a.palm), a.fingers ? dirB(a.fingers) : null, a.point || 'grip', a.curl || GRIP);
+    const a = P.arms[j], l = P.legs[j], X = toB(a.to), g = (P.scap && P.scap[j]) || {};
+    // where the shoulder is with the girdle at rest, then how far the arm is raised / reaching forwards from there
+    R[scapIx(j)].copy(R[SPINE2]);
+    const d = X.clone().sub(jointPos(boneIx(j, UPPER))).applyQuaternion(chestInv).normalize();
+    const raise = Math.acos(Math.min(1, Math.max(-1, -d.y)));   // 0 arm down, pi straight up
+    const elev = 0.42 * sstep(0.5, 2.9, raise) + (g.elev || 0);
+    const prot = 0.2 * Math.max(0, d.z) * sstep(0.3, 1.5, raise) + (g.prot || 0);
+    R[scapIx(j)].copy(R[SPINE2]).multiply(qAxis(AXIS_Y, -s.sg * prot)).multiply(qAxis(AXIS_Z, s.sg * elev));
+    solveArm(s, j, X, jointPos(boneIx(j, UPPER)), dirB(a.pole), dirB(a.palm), a.fingers ? dirB(a.fingers) : null, a.point || 'grip', a.curl || GRIP);
     if (l.fk) legAngles(s, j, l.fk);
     else solveLeg(s, j, toB(l.to), dirB(l.pole), l.toe ? dirB(l.toe) : null, dirB(l.down || V3(0, -1, 0)));
   });
@@ -1184,12 +1281,27 @@ function ik2(a, t, l1, l2, pole) {
 
 // arm (body coordinates of the standing pose): shoulder + elbow by ik, hand turned to the palm / finger directions,
 // the wrist twist spread over the forearm, fingers curled
-function solveArm(s, j, X, pole, palm, fingers, point, curl) {
+// rotation of the lower back (k = 0.5) / upper back (k = 1) for a spine spec
+const spineQ = (sp, k) => qAxis(AXIS_Y, (sp.twist || 0) * k).multiply(qAxis(AXIS_Z, -(sp.side || 0) * k)).multiply(qAxis(AXIS_X, (sp.flex || 0) * k));
+// world position of body point bp (standing pose) on the upper body when the spine is bent by sp: for hand targets
+// that must stay with the head or chest (hands behind the head, rope by the ears...)
+function chestW(root, sp, bp) {
+  const pL = rig.pivot[SPINE1], pT = rig.pivot[SPINE2];
+  const t = pT.clone().sub(pL).applyQuaternion(spineQ(sp, 0.5)).add(pL);
+  return toW(root, bp.clone().sub(pT).applyQuaternion(spineQ(sp, 1)).add(t));
+}
+// position of a bone's joint in the current target pose (body coordinates), following the chain of parents
+function jointPos(i) {
+  const par = BONE_PARENT[i];
+  return par < 0 ? rig.pivot[i].clone() : rig.pivot[i].clone().sub(rig.pivot[par]).applyQuaternion(rig.R[par]).add(jointPos(par));
+}
+// Sp: where the shoulder joint is (it moves with the girdle and the spine)
+function solveArm(s, j, X, Sp, pole, palm, fingers, point, curl) {
   const off0 = (point === 'palm' ? s.P0 : point === 'wrist' ? s.W : s.G0).clone().sub(s.W);
   let Wt = X.clone().sub(off0), Ru, Rf, Rh, uf;
   for (let it = 0; it < 4; it++) {
-    const { mid: E, end: W } = ik2(s.S, Wt, s.L1, s.L2, pole);
-    const ua = E.clone().sub(s.S).normalize();
+    const { mid: E, end: W } = ik2(Sp, Wt, s.L1, s.L2, pole);
+    const ua = E.clone().sub(Sp).normalize();
     uf = W.clone().sub(E).normalize();
     Ru = qFrames(s.a0, s.n0, ua, perpTo(uf, ua));
     Rf = new THREE.Quaternion().setFromUnitVectors(s.f0.clone().applyQuaternion(Ru), uf).multiply(Ru);
@@ -1785,10 +1897,10 @@ const floorArms = rest => rig.sides.map(s => {
 
 // hollow body hold: on the back, shoulders and straight legs just off the floor, arms reaching past the head; small rock
 function hollowPose(u) {
-  const root = rootAt(headUp(ON_BACK, lerp(0.14, 0.18, u)), V3(0, 9.5, rig.zBack), V3(0, 0.15, 0));
+  const root = rootAt(headUp(ON_BACK, 0.05), V3(0, 9.5, rig.zBack), V3(0, 0.15, 0));
   return {
-    root,
-    arms: rig.sides.map(s => armTo(toW(root, s.S).add(V3(-0.95, 0.25, 0).normalize().multiplyScalar(0.97 * rig.reach)), V3(0, 1, 0),
+    root, spine: { flex: lerp(0.3, 0.38, u) }, head: { flex: 0.15 },
+    arms: rig.sides.map(s => armTo(chestW(root, { flex: lerp(0.3, 0.38, u) }, s.S).add(V3(-0.95, 0.25, 0).normalize().multiplyScalar(0.97 * rig.reach)), V3(0, 1, 0),
       V3(0, 1, 0), { point: 'wrist', fingers: V3(-1, 0, 0), curl: RELAX })),
     legs: rig.sides.map(() => ({ fk: { flex: lerp(0.42, 0.36, u), abd: -0.03, ankle: 0.5 } })),
   };
@@ -1821,14 +1933,14 @@ function mountainClimberPose(u, ph) {
 function reverseCrunchPose(u) {
   const L = rig.sides[0], pivot = V3(0, L.S.y - 1.2, rig.zBack);
   const rest = rootAt(ON_BACK, pivot, V3(0, 0.2, 0)), root = rootAt(headUp(ON_BACK, -lerp(0, 0.22, u)), pivot, V3(0, 0.2, 0));
-  return { root, arms: floorArms(rest), legs: rig.sides.map(() => ({ fk: { flex: lerp(1.5, 2.3, u), knee: lerp(1.7, 2.0, u), ankle: 0.3 } })) };
+  return { root, spine: { flex: lerp(0, 0.2, u) }, arms: floorArms(rest), legs: rig.sides.map(() => ({ fk: { flex: lerp(1.5, 2.3, u), knee: lerp(1.7, 2.0, u), ankle: 0.3 } })) };
 }
 
 // mcgill curl-up: on the back, right knee bent, hands under the lower back; head and shoulders lift a few centimetres
 function mcgillPose(u) {
-  const rest = rootAt(ON_BACK, V3(0, 9.0, rig.zBack), V3(0, 0.2, 0)), root = rootAt(headUp(ON_BACK, lerp(0, 0.1, u)), V3(0, 9.0, rig.zBack), V3(0, 0.2, 0));
+  const rest = rootAt(ON_BACK, V3(0, 9.0, rig.zBack), V3(0, 0.2, 0)), root = rest;
   return {
-    root,
+    root, spine: { flex: lerp(0, 0.16, u) }, head: { flex: lerp(0, -0.05, u) },
     arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * 0.8, 9.6, rig.zBack - 0.2)), dirW(root, V3(s.sg, 0, 0.3)), V3(0, 1, 0),
       { point: 'palm', fingers: dirW(root, V3(0, 1, 0)), curl: FLAT })),
     legs: [{ fk: {} }, (() => { const H = toW(rest, rig.sides[1].H); return footFlat(V3(H.x + 5.0, rig.sides[1].A.y, H.z), V3(0, 1, 0), V3(1, 0, 0)); })()],
@@ -1857,14 +1969,17 @@ function abWheelPose(u) {
 
 // bicycle crunch: shoulders off the floor, hands behind the head; one knee comes in while the other leg reaches out,
 // and the trunk turns towards the bent knee
+const bikeSpine = (a, b) => ({ flex: 0.55, twist: 0.45 * (a - b) });
 function bicyclePose(u, ph) {
   const [a, b] = alt(ph);
-  const q = headUp(ON_BACK, 0.3).multiply(qAxis(AXIS_Y, 0.3 * (b - a)));
-  const root = rootAt(q, V3(0, 9.3, rig.zBack), V3(0, 0.25, 0));
+  const root = rootAt(ON_BACK, V3(0, 9.3, rig.zBack), V3(0, 0.25, 0));
   return {
-    root,
-    arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * 0.45, 16.0, rig.zBack + 0.5)), dirW(root, V3(s.sg, 0.2, 0.3)), dirW(root, V3(0, 0, 1)),
-      { point: 'palm', fingers: dirW(root, V3(-s.sg, 0.3, 0)), curl: RELAX })),
+    root, spine: bikeSpine(a, b), head: { flex: 0.1 },
+    arms: rig.sides.map(s => {
+      const cq = root.q.clone().multiply(spineQ(bikeSpine(a, b), 1));
+      return armTo(chestW(root, bikeSpine(a, b), V3(s.sg * 0.45, 16.0, rig.zBack + 0.5)), V3(s.sg, 0.2, 0.3).applyQuaternion(cq), V3(0, 0, 1).applyQuaternion(cq),
+        { point: 'palm', fingers: V3(-s.sg, 0.3, 0).applyQuaternion(cq), curl: RELAX });
+    }),
     legs: rig.sides.map((s, j) => { const e = j === 0 ? a : b; return { fk: { flex: lerp(0.45, 1.75, e), knee: lerp(0.08, 1.9, e), ankle: 0.4 } }; }),
   };
 }
@@ -1872,12 +1987,15 @@ function bicyclePose(u, ph) {
 // russian twist: sitting on the floor leaning back, feet up, hands together; the trunk turns side to side
 function russianTwistPose(u, ph) {
   const turn = Math.sin(2 * Math.PI * ph) * 0.45, hips = midHips();
-  const q = qAxis(AXIS_Y, turn).multiply(qAxis(AXIS_X, -0.75));
+  const q = qAxis(AXIS_X, -0.75);
   const root = rootAt(q, hips, V3(0, 1.3, 0));
   return {
-    root,
-    arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * 0.35, rig.yChest - 0.5, rig.chestZAt(rig.yChest) + 3.6)), dirW(root, V3(s.sg, -0.6, 0)),
-      dirW(root, V3(-s.sg, 0, 0)), { point: 'palm', curl: RELAX })),
+    root, spine: { flex: 0.2, twist: turn },
+    arms: rig.sides.map(s => {
+      const sp = { flex: 0.2, twist: turn }, cq = root.q.clone().multiply(spineQ(sp, 1));
+      return armTo(chestW(root, sp, V3(s.sg * 0.35, rig.yChest - 0.5, rig.chestZAt(rig.yChest) + 3.6)), V3(s.sg, -0.6, 0).applyQuaternion(cq),
+        V3(-s.sg, 0, 0).applyQuaternion(cq), { point: 'palm', curl: RELAX });
+    }),
     legs: rig.sides.map(() => ({ fk: { flex: 2.0, knee: 1.5, ankle: 0.3 } })),
   };
 }
@@ -1885,11 +2003,12 @@ function russianTwistPose(u, ph) {
 // cable crunch: kneeling below a high pulley, rope by the sides of the head; the trunk curls down towards the floor
 function cableCrunchPose(u) {
   const hips = midHips(), L = rig.sides[0];
-  const root = rootAt(qAxis(AXIS_X, lerp(0.35, 1.15, u)), hips, V3(0, L.lt + 0.5, 0));
+  const root = rootAt(qAxis(AXIS_X, lerp(0.3, 0.5, u)), hips, V3(0, L.lt + 0.5, 0)), spine = { flex: lerp(0.1, 1.0, u) };
+  const cq = root.q.clone().multiply(spineQ(spine, 1));   // chest orientation (world)
   return {
-    root,
-    arms: rig.sides.map(s => armTo(toW(root, V3(s.sg * 0.95, 15.9, 1.2)), dirW(root, V3(s.sg * 0.4, -1, 0.6)), dirW(root, V3(-s.sg, 0, 0)),
-      { fingers: dirW(root, V3(0, 1, 0)) })),
+    root, spine, head: { flex: lerp(0, 0.2, u) },
+    arms: rig.sides.map(s => armTo(chestW(root, spine, V3(s.sg * 0.95, 15.6, 1.0)), V3(s.sg * 0.4, -1, 0.6).applyQuaternion(cq), V3(-s.sg, 0, 0).applyQuaternion(cq),
+      { fingers: V3(0, 1, 0).applyQuaternion(cq) })),
     legs: rig.sides.map(s => ({ to: V3(s.sg * 1.0, 0.55, -L.ls * 0.97), pole: V3(0, -0.4, 1), toe: V3(0, -0.2, -1).normalize(), down: V3(0, 1, 0) })),
   };
 }
@@ -2178,7 +2297,7 @@ function gearOf(def) {
 const _L = new THREE.Matrix4(), _D = new THREE.Matrix4(), _P = BONE_PARENT.map(() => V3()), _one = V3(1, 1, 1);
 function applyShown() {
   const r = rig, sh = r.shown;
-  for (let i = 0; i < sh.R.length; i++) {
+  for (const i of BONE_ORDER) {
     const par = BONE_PARENT[i];
     if (par < 0) _P[i].set(0, 0, 0);
     else _P[i].copy(r.pivot[i]).sub(r.pivot[par]).applyQuaternion(sh.R[par]).add(_P[par]);
@@ -2229,9 +2348,12 @@ function withRestPose(fn) {
 let motionFreeze = null;
 window.mmTest = {
   motions: () => Object.keys(MOTIONS),
+  // anatomical mesh names matching a pattern, with their bounding boxes (for rig landmarks)
+  names: re => drawables.filter(m => new RegExp(re, 'i').test(m.userData.zname || '')).map(m => { const b = new THREE.Box3().setFromObject(m); return [m.userData.zname, ...[b.min.x, b.max.x, b.min.y, b.max.y, b.min.z, b.max.z].map(v => +v.toFixed(2))]; }),
   // where the hands ended up vs where the pose asked them to go (debugging poses)
-  hands: (name, u) => { const P = MOTIONS[name].pose(u, u * 0.5); const h = applyShown(); return { want: P.arms.map(a => a.to), got: h.grip }; },
-  show(name, u) {
+  hands: (name, u) => { const P = motionPose(MOTIONS[name], u, u * 0.5); const h = applyShown(); return { want: P.arms.map(a => a.to), got: h.grip }; },
+  // cam (optional): { theta, phi } to look from another side than the exercise's own view
+  show(name, u, cam) {
     state.exercise = exByName[name] || null; motionFreeze = u;
     renderPanel(); refresh();
     updateMotion(0);
@@ -2239,7 +2361,7 @@ window.mmTest = {
     updateMotion(0);
     // put the camera straight at the exercise's view instead of easing there
     if (motion && motion.def) {
-      const v = motion.def.view;
+      const v = cam ? { ...motion.def.view, ...cam } : motion.def.view;
       controls.target.copy(v.target);
       camera.position.setFromSphericalCoords(viewDist(v), v.phi, v.theta).add(v.target);
       camGoal = null; camDist = null;
@@ -2279,7 +2401,7 @@ function updateMotion(dt) {
     // (test hook: motionFreeze holds the pose at u = motionFreeze, used for start / end screenshots;
     // ph = u / 4 so alternating exercises show their first side fully out at u = 1)
     const ph = motionFreeze !== null ? motionFreeze * 0.25 : (motion.t / motion.def.period) % 1;
-    solvePose(motion.def.pose(motionFreeze !== null ? motionFreeze : 0.5 - 0.5 * Math.cos(2 * Math.PI * ph), ph));
+    solvePose(motionPose(motion.def, motionFreeze !== null ? motionFreeze : 0.5 - 0.5 * Math.cos(2 * Math.PI * ph), ph));
     gearOf(motion.def);
   }
   blendShown(motion.from, b, !motion.def);
